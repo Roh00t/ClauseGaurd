@@ -946,7 +946,9 @@ async function runAnalysis() {
     const data = await r.json();
     hideLoading();
     clearFiles();
-    renderAnalysis({ analysis: data.analysis, judgment: data.judgment }, contractNames, contextNames);
+    renderAnalysis({ analysis: data.analysis, judgment: data.judgment,
+      redaction_reports: data.redaction_reports, attestation: data.attestation },
+      contractNames, contextNames);
     await loadSessions();
   } catch(e) {
     clearInterval(stepTimer);
@@ -1065,6 +1067,8 @@ function renderJudgment(judgment) {
 function renderAnalysis(data, contractFilenames, contextFilenames) {
   const a = (data && data.analysis) || {};
   const judgment = (data && data.judgment) || null;
+  const redactionReports = (data && data.redaction_reports) || [];
+  const attestation = (data && data.attestation) || null;
   document.getElementById('emptyState').style.display = 'none';
   const area = document.getElementById('analysisArea');
   area.style.display = '';
@@ -1093,6 +1097,38 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
       <div class="severity-text">${esc(a.executive_summary)}</div>
     </div>
   </div>`;
+
+  // ── 1b. PII REDACTION (Addition A) — shown before the analysis content ──
+  if (redactionReports.length) {
+    const totalRedacted = redactionReports.reduce((n, r) => n + (r.total_redactions || 0), 0);
+    const engines = [...new Set(redactionReports.map(r => r.engine))];
+    html += `<div class="msg">
+      <div class="section-h">PII Redaction — applied before any text reached the AI</div>
+      <div class="severity-banner" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.28)">
+        <div class="severity-text">
+          <strong>${totalRedacted}</strong> personal-data item(s) redacted across
+          ${redactionReports.length} file(s) before any text was sent to the AI model
+          (engine: ${esc(engines.join(', '))}).
+          <div style="font-size:11px;color:var(--text-3);margin-top:6px">
+            Automated redaction removes NRIC numbers, emails, phone numbers, and common
+            address patterns. It does NOT catch names in prose, signatures, or company names.
+          </div>
+        </div>
+      </div>
+      <div class="doc-cards" style="margin-top:8px">
+        ${redactionReports.map(r => `<div class="doc-card">
+          <div class="doc-card-header">
+            <div class="doc-name">${esc(r.filename)}</div>
+            <span class="doc-signed signed-partial">${r.total_redactions || 0} redacted · ${esc(r.engine)}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text-2)">${
+            Object.entries(r.redaction_report || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(' · ')
+            || 'no PII patterns matched (does not mean none present)'
+          }</div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
 
   // ── 2. DOCUMENTS ─────────────────────────────────────────────
   if (a.documents_analyzed?.length) {
@@ -1217,6 +1253,30 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
         <div class="draft-to">To: ${esc(draft.to || 'MOM Contact Centre / TADM')}</div>
         <div class="draft-subject">Subject: ${esc(draft.subject)}</div>
         <div class="draft-body">${esc(draft.body)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:10px;border-top:1px solid var(--border-2);padding-top:8px">
+          Fill in the bracketed fields (e.g. [YOUR NAME], [YOUR NRIC]) with your real
+          details before sending — these were redacted during analysis for privacy.
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── 7b. ATTESTATION RECEIPT (Addition B) ─────────────────────
+  if (attestation) {
+    html += `<div class="msg">
+      <div class="section-h">Attestation Receipt (Terminal 3)</div>
+      <div class="draft-box">
+        <div style="font-size:11px;color:var(--text-3);margin-bottom:8px">
+          This signature proves the report is <strong>UNALTERED</strong> since signing —
+          it does <strong>not</strong> prove the analysis is correct.
+        </div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-2);word-break:break-all;line-height:1.7">
+          ${attestation.did ? `<div>DID: ${esc(attestation.did)}</div>` : ''}
+          ${attestation.report_hash ? `<div>SHA-256: ${esc(attestation.report_hash)}</div>` : ''}
+          ${attestation.signature ? `<div>HMAC: ${esc(attestation.signature)}</div>` : ''}
+          ${attestation.signed_at ? `<div>Signed at: ${esc(String(attestation.signed_at))}</div>` : ''}
+          ${attestation.error ? `<div style="color:var(--orange)">${esc(attestation.error)}</div>` : ''}
+        </div>
       </div>
     </div>`;
   }

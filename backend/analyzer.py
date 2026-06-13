@@ -182,6 +182,17 @@ Both must be present even if context_docs is empty.
   }
 }
 
+MOM_REPORT_DRAFT — REDACTION & PLACEHOLDER RULE (read carefully):
+The uploaded text has been PII-redacted before reaching you. You will see tokens
+like [REDACTED_NRIC], [REDACTED_EMAIL], [REDACTED_PHONE], [REDACTED_ADDRESS] where
+personal data used to be. In mom_report_draft, NEVER copy a [REDACTED_*] token into
+the letter and NEVER invent a value to replace it. Instead use a bracketed fill-in
+placeholder the user completes themselves: [YOUR NAME], [YOUR NRIC], [EMPLOYER NAME],
+[YOUR ADDRESS], [YOUR EMAIL], [YOUR PHONE], [DATE]. The same rule applies to any
+fact (name, date, figure, reference number) that is NOT present in the provided
+text: use a bracketed placeholder rather than fabricating it. Facts that ARE present
+in the text (e.g. clause wording, bond terms, salary figures) should be used directly.
+
 BREVITY: keep fields tight (executive_summary 2-3 sentences; at most 6 red_flags;
 mom_report_draft.body 120-180 words). Be specific and concise; do not pad."""
 

@@ -4,6 +4,30 @@ Captured during the Build Order + automated stress pass (2026-06-13).
 **No P0 issues.** 35-test suite passes (functional 33/33; perf 3/3 under normal
 API speed); the real 5-doc Xcellink case analyses end-to-end.
 
+## ADDITIONS A–D — Restored privacy + sponsor guardrails (2026-06-13)
+
+PII redaction (Daytona, **local-regex fallback**) and Terminal 3 attestation were
+re-added to the analyze flow; MOM letter now uses fill-in placeholders; a second
+synthetic fixture (`synthetic_unsigned_form.pdf`) enables a 2-file cross-document
+demo. Re-verified end-to-end on synthetic files + **all 35 tests still pass** with
+redaction in the pipeline. Sponsor integrations back to **4** (Bright Data, Daytona,
+TokenRouter, Terminal 3).
+
+### Additions P1 notes
+- **Test-suite duration ~27 min** (was ~13 min). Redaction adds one Daytona
+  sandbox round-trip per analyze-hitting test. This is *test* duration, not product
+  latency — see next bullet. P1, infra-only.
+- **Redaction product latency is small:** ~5s for 2 files run concurrently (Daytona).
+  The ~117s seen on the synthetic 2-file analyze was the LLM call (TokenRouter latency
+  variance), not redaction. Redaction adds ~5s on top of the existing analyze time.
+- **Daytona dependency for the "in-sandbox" badge:** if Daytona is down, redaction
+  silently falls back to identical in-process regex (privacy preserved, `engine:"local"`
+  shown in the UI). Only the "ran in Daytona" demo point is lost on a fallback run.
+- **Attestation is response-only** (not persisted): reloading an old session from the
+  sidebar won't show the receipt. Fresh analyses show it. Acceptable for the demo.
+- **Name redaction limitation unchanged:** regex catches NRIC/email/phone/address, NOT
+  names in prose, signatures, or company names — surfaced in the UI redaction banner.
+
 ## AMENDMENT — Dual-Panel + Combined Dispute Judgment (2026-06-13)
 
 The single `/api/analyze` (`files`) endpoint became a dual-panel one

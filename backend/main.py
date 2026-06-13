@@ -38,7 +38,9 @@ load_dotenv()
 from backend.db import get_conn, init_db, migrate_db
 from backend.scraper import get_regulations
 from backend.extractor import extract_text, extract_context_text
+from backend.redaction import redact_documents
 from backend.analyzer import analyze_combined
+from src.terminal3_signer import sign_report_hash
 from backend.security import (
     validate_file, MAX_FILES, MAX_TOTAL_SIZE_BYTES, MAX_FILE_SIZE_BYTES,
 )
@@ -167,6 +169,24 @@ async def analyze(
         else:
             context_errors.append({"filename": f.filename, "error": result.get("error", "No text extracted")})
 
+    # ── 3b. Redact PII in EVERY doc BEFORE it reaches the LLM (Addition A).
+    #        Daytona sandbox per doc, concurrent, with an in-process regex
+    #        fallback so the LLM never receives un-redacted text. The analyzer
+    #        then wraps the already-redacted text (redact -> wrap -> analyze). ─
+    contract_docs = redact_documents(contract_docs)
+    context_docs = redact_documents(context_docs)
+    redaction_reports = [
+        {
+            "filename": d["filename"],
+            "panel": panel,
+            "redaction_report": d["redaction_report"],
+            "total_redactions": d["total_redactions"],
+            "engine": d["engine"],
+        }
+        for panel, docs in (("contract", contract_docs), ("context", context_docs))
+        for d in docs
+    ]
+
     # ── 4. Load MOM regulations (cached, fast after first scrape). ──────────
     reg_data = get_regulations()
     regs = reg_data.get("regulations", [])
@@ -186,6 +206,20 @@ async def analyze(
     analysis = combined["analysis"]
     judgment = combined["judgment"]
     duplicate_warnings = combined.get("duplicate_warnings", [])
+
+    # ── 5b. Tamper-evident attestation (Addition B). Hash the final report and
+    #        HMAC-sign it via Terminal 3 (pure stdlib, no network -> cannot fail
+    #        due to connectivity). Proves the report is UNALTERED since signing,
+    #        NOT that the analysis is correct. ──────────────────────────────────
+    import hashlib
+    report_bytes = json.dumps(
+        {"analysis": analysis, "judgment": judgment}, sort_keys=True
+    ).encode("utf-8")
+    report_hash = hashlib.sha256(report_bytes).hexdigest()
+    try:
+        attestation = sign_report_hash(report_hash)
+    except Exception as e:  # noqa: BLE001 -- attestation must never block analysis
+        attestation = {"error": f"signing unavailable: {e}", "report_hash": report_hash}
 
     # ── 6. Persist the session (parameterised — RT8). ──────────────────────
     session_id = uuid.uuid4().hex[:8]
@@ -219,6 +253,8 @@ async def analyze(
         "context_docs_processed": len(context_docs),
         "extraction_errors": contract_errors + context_errors,
         "duplicate_files_excluded": duplicate_warnings,
+        "redaction_reports": redaction_reports,
+        "attestation": attestation,
         "regulation_source": reg_data.get("source"),
         "analysis": analysis,
         "judgment": judgment,
