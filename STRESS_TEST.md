@@ -639,3 +639,122 @@ After running all automated tests in Part A, Claude Code must fill in this table
 - [ ] Rate limiting returns 429 after 6th request in a minute (test with curl loop)
 
 **When all boxes are checked: demo is ready. Stop building.**
+---
+
+# ════════════════════════════════════════════════════════════════════════════
+# AMENDMENT ADDENDUM — Dual-Panel Upload + Combined Dispute Judgment
+# Appended (not rewritten) for the contract_files / context_files endpoint.
+# ════════════════════════════════════════════════════════════════════════════
+
+## PART A (ADDENDUM) — NEW AUTOMATED TESTS
+These are already present in `tests/test_backend.py` as `TestDualPanelUpload`
+and `TestJudgmentOutput`. Run the whole suite with:
+`CLAUSEGUARD_TEST_BUDGET=180 python3.13 -m pytest tests/test_backend.py -v`
+
+```python
+class TestDualPanelUpload:
+    def test_contract_files_only_returns_insufficient_judgment(self):
+        """Panel A only -> judgment must be INSUFFICIENT_INFORMATION."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
+        ])
+        assert r.status_code == 200
+        assert r.json()["judgment"]["verdict"] == "INSUFFICIENT_INFORMATION"
+
+    def test_old_files_field_name_is_rejected_or_handled(self):
+        """The old 'files' field name must not silently succeed (400/422)."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[("files", ("c.pdf", pdf, "application/pdf"))])
+        assert r.status_code in (400, 422)
+
+    def test_context_only_no_contract_is_rejected(self):
+        """Panel B without Panel A -> 400 with an employment-document message."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[("context_files", ("d.pdf", pdf, "application/pdf"))])
+        assert r.status_code == 400
+        assert "employment document" in r.json()["detail"].lower()
+
+    def test_txt_context_file_accepted(self):
+        """WhatsApp .txt export accepted in context_files."""
+        contract = make_sample_contract_pdf()
+        txt = b"28 May 2026 - HR: Pay S$3000 or sign extension. Employee: I disagree."
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", contract, "application/pdf")),
+            ("context_files", ("whatsapp_export.txt", txt, "text/plain")),
+        ])
+        assert r.status_code == 200
+        assert r.json()["context_docs_processed"] == 1
+
+    def test_combined_file_count_limit(self):
+        """6 contract + 5 context = 11 total -> 400 mentioning the limit."""
+        pdf = make_sample_contract_pdf()
+        files = ([("contract_files", (f"c{i}.pdf", pdf, "application/pdf")) for i in range(6)] +
+                 [("context_files", (f"x{i}.pdf", pdf, "application/pdf")) for i in range(5)])
+        r = client.post("/api/analyze", files=files)
+        assert r.status_code == 400 and "10" in r.json()["detail"]
+
+    def test_duplicate_file_in_both_panels_does_not_crash(self):
+        """Same file in both panels must not 500."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", pdf, "application/pdf")),
+            ("context_files", ("contract.pdf", pdf, "application/pdf")),
+        ])
+        assert r.status_code in (200, 400) and r.status_code != 500
+
+
+class TestJudgmentOutput:
+    # required-fields, uppercase-enum, judgment-saved-in-session, and
+    # verdict<->severity cross-validation. See tests/test_backend.py for bodies.
+    ...
+```
+
+NOTE on robustness: `analyze_combined()` retries the LLM up to 3x on a JSON
+parse/validation failure (Haiku occasionally emits malformed JSON; when valid it
+is correct). Timeouts are NOT retried. This keeps the combined call reliable.
+
+## PART B (ADDENDUM) — COWORK / CLAUDE-IN-CHROME UI TESTS
+
+### COWORK TEST 9 — Dual Panel Upload Verification
+On http://127.0.0.1:8000:
+1. Are TWO upload panels visible, side by side?
+2. Is Panel A labelled "Employment Documents · Required"?
+3. Is Panel B labelled "Dispute Context · Optional"?
+4. Does Panel B's drop zone accept .txt files (WhatsApp exports)?
+5. Add a file to Panel A only. Is there a grey note on Panel B: "Add context for a dispute verdict"?
+6. Add a .txt file to Panel B. Does the note turn green: "⚖ Dispute judgment will be included"?
+7. Click "Analyse Everything" with Panel A files only.
+   - Judgment section at the TOP of results?
+   - "Insufficient Information" with a GREY banner?
+   - Tells the user what to upload?
+8. Add context files to Panel B and re-analyse.
+   - Real verdict (EMPLOYER/EMPLOYEE/BOTH)?
+   - Banner GREEN (employer), RED (employee), or YELLOW (both) — NEVER amber?
+   - "Employer Conduct" + "Employee Conduct" two-column breakdown visible?
+   - Recommended forum shown with a reason?
+9. Click a previous session in the sidebar. Does the judgment still render (not blank)?
+10. Does the sidebar show a coloured verdict label per session?
+
+### COWORK TEST 10 — Real Document Judgment (The Actual Demo)
+Upload these 5 Xcellink files:
+  Panel A (Employment Documents):
+    - CLT_-_Trainee_Acknowledgement_Form_-_Rohit_Panda.pdf
+    - Contract_Extension_Letter_-_Rohit_Panda.pdf
+    - Rohit_Panda_-Training_Form_-_25_May_2026.pdf
+  Panel B (Dispute Context):
+    - Rohit_Panda_Xcellink_Dispute_Record_v2.pdf
+    - Xcellink_Saga.pdf
+Click "Analyse Everything". Wait for completion.
+Report:
+1. Verdict? (Expected: EMPLOYER_AT_FAULT)
+2. Confidence? (Expected: HIGH or MEDIUM)
+3. Does the reasoning mention: unsigned training form; Jan→May 2026 training delay;
+   Albert Lim's written admission; LOA not countersigned; natural expiry vs resignation?
+4. Does employer "problematic" list the 28 May meeting?
+5. Does employee "defensible" acknowledge Rohit's reasonable behaviour?
+6. Recommended forum includes TADM or TAFEP?
+7. ≥4 red flags in the analysis section?
+8. Judgment at the TOP, above the red flags?
+9. "Contradictions noted" warning? (Should be null for this case.)
+Screenshot the judgment section — this is the core demo scenario.

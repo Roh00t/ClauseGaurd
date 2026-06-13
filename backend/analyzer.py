@@ -337,10 +337,21 @@ EMPLOYMENT DOCUMENTS (formal contracts and forms):
 {dup_line}
 Analyse all documents. Return the combined JSON with both "analysis" and "judgment" sections.""".strip()
 
-    raw = _call_with_timeout(COMBINED_SYSTEM_PROMPT, user_message)
-    data = _parse_combined(raw)
-    data["duplicate_warnings"] = duplicate_warnings
-    return data
+    # LLM JSON is occasionally malformed (a trailing comma, an unescaped char,
+    # a stray preamble). When it IS valid it's correct, so retry up to 3x on a
+    # parse/validation failure before giving up. Timeouts are NOT retried — they
+    # would blow the latency budget.
+    last_err = None
+    for _ in range(3):
+        try:
+            raw = _call_with_timeout(COMBINED_SYSTEM_PROMPT, user_message)
+            data = _parse_combined(raw)
+            data["duplicate_warnings"] = duplicate_warnings
+            return data
+        except ValueError as e:
+            last_err = e
+            continue
+    raise last_err
 
 
 def _call_llm(system_prompt: str, user_message: str) -> str:
@@ -366,7 +377,7 @@ def _call_anthropic(api_key: str, system_prompt: str, user_message: str) -> str:
     client = anthropic.Anthropic(api_key=api_key, timeout=LLM_TIMEOUT)
     msg = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=8192,
+        max_tokens=16000,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -378,7 +389,7 @@ def _call_openai_compat(api_key, base_url, model, system_prompt, user_message) -
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=LLM_TIMEOUT)
     resp = client.chat.completions.create(
         model=model,
-        max_tokens=8192,
+        max_tokens=16000,  # 5-doc combined analysis+judgment is large (~8k tok) — avoid truncation
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},

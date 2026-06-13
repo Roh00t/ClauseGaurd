@@ -1,8 +1,43 @@
 # ClauseGuard v2 — Known Issues
 
 Captured during the Build Order + automated stress pass (2026-06-13).
-**No P0 issues.** 25/25 automated tests pass; the real 5-doc Xcellink case
-analyses end-to-end (HTTP 200, severity CRITICAL, 6 targeted red flags).
+**No P0 issues.** 35-test suite passes (functional 33/33; perf 3/3 under normal
+API speed); the real 5-doc Xcellink case analyses end-to-end.
+
+## AMENDMENT — Dual-Panel + Combined Dispute Judgment (2026-06-13)
+
+The single `/api/analyze` (`files`) endpoint became a dual-panel one
+(`contract_files` required + `context_files` optional PDF/TXT/EML), returning
+ONE combined `{analysis, judgment}` from a single LLM call. The judgment renders
+above the red flags; sessions store/reload it; the sidebar shows a verdict label.
+
+**Real 5-file Xcellink demo:** EMPLOYER_AT_FAULT, HIGH confidence, 6 CRITICAL
+red flags, ~96s. Judgment cites the unsigned training form, the Jan→May training
+delay, the uncountersigned LOA, the 28 May intimidation meeting, and Albert Lim's
+email admission.
+
+### Amendment P1 notes
+- **Combined-call robustness.** Haiku occasionally emits malformed JSON; when
+  valid it is correct. `analyze_combined()` retries up to 3x on a parse/validation
+  failure (timeouts are NOT retried). This made the functional suite reliable.
+- **max_tokens=16000.** The 5-doc combined output is ~8k tokens; at the old 8192
+  cap it truncated → invalid JSON. Raised to 16000. A *much* larger upload could
+  still truncate (would surface as a 502 after retries, never a crash).
+- **Perf tests are latency-sensitive to TokenRouter.** On a normal run all 35
+  pass; during one overloaded window (23.7min vs 12.8min) the two wall-clock perf
+  tests flaked (a single Haiku call exceeded the 180s budget). Functional
+  correctness is unaffected. Budget is tunable via `CLAUSEGUARD_TEST_BUDGET`.
+- **Default model = Haiku 4.5** (was Sonnet) for demo speed — env-overridable.
+
+### Amendment — deviations from the brief's literal code (intentional)
+- **No double-wrapping.** `main.py` passes RAW text; `analyze_combined` wraps once
+  and dedups on raw text (the brief wrapped in both places, which also broke the
+  cross-panel md5 dedup since the wrapper embeds the filename).
+- **Timeout 90s → 180s.** The brief's 90s would 504 the real multi-doc case.
+- **max_tokens 6000 → 16000.** 6000 would truncate the combined output.
+
+---
+
 
 ## Stress-test results (Part C)
 
