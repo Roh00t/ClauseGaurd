@@ -123,27 +123,27 @@ class TestHealth:
 class TestFileValidation:
     def test_non_pdf_extension_rejected(self):
         r = client.post("/api/analyze", files=[
-            ("files", ("resume.txt", b"I am a text file", "text/plain"))
+            ("contract_files", ("resume.txt", b"I am a text file", "text/plain"))
         ])
         assert r.status_code == 400, f"Expected 400, got {r.status_code}"
 
     def test_fake_pdf_magic_bytes_rejected(self):
         fake = b"Not a PDF at all, just pretending"
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", fake, "application/pdf"))
+            ("contract_files", ("contract.pdf", fake, "application/pdf"))
         ])
         assert r.status_code == 400
 
     def test_oversized_file_rejected(self):
         big = make_pdf("x " * 100) + (b"A" * (16 * 1024 * 1024))
         r = client.post("/api/analyze", files=[
-            ("files", ("huge.pdf", big, "application/pdf"))
+            ("contract_files", ("huge.pdf", big, "application/pdf"))
         ])
         assert r.status_code == 413, f"Expected 413 for oversized file, got {r.status_code}"
 
     def test_too_many_files_rejected(self):
         pdf = make_sample_contract_pdf()
-        files = [("files", (f"doc{i}.pdf", pdf, "application/pdf")) for i in range(11)]
+        files = [("contract_files", (f"doc{i}.pdf", pdf, "application/pdf")) for i in range(11)]
         r = client.post("/api/analyze", files=files)
         assert r.status_code == 400
 
@@ -156,7 +156,7 @@ class TestFileValidation:
         blank_pdf.add_page()
         blank_bytes = bytes(blank_pdf.output())
         r = client.post("/api/analyze", files=[
-            ("files", ("blank.pdf", blank_bytes, "application/pdf"))
+            ("contract_files", ("blank.pdf", blank_bytes, "application/pdf"))
         ])
         assert r.status_code != 500, f"Server crashed on blank PDF: {r.text}"
 
@@ -167,7 +167,7 @@ class TestAnalysis:
     def test_single_contract_analysis_returns_valid_structure(self):
         pdf = make_sample_contract_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", pdf, "application/pdf"))
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code == 200, f"Analyze failed: {r.text[:500]}"
         data = r.json()
@@ -189,8 +189,8 @@ class TestAnalysis:
         contract = make_sample_contract_pdf()
         training = make_unsigned_training_form_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", contract, "application/pdf")),
-            ("files", ("training_form.pdf", training, "application/pdf")),
+            ("contract_files", ("contract.pdf", contract, "application/pdf")),
+            ("contract_files", ("training_form.pdf", training, "application/pdf")),
         ])
         assert r.status_code == 200, f"Multi-file analyze failed: {r.text[:500]}"
         data = r.json()
@@ -201,7 +201,7 @@ class TestAnalysis:
     def test_session_is_saved_after_analysis(self):
         pdf = make_sample_contract_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", pdf, "application/pdf"))
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code == 200
         sid = r.json()["session_id"]
@@ -212,7 +212,7 @@ class TestAnalysis:
     def test_session_retrieval(self):
         pdf = make_sample_contract_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", pdf, "application/pdf"))
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
         ])
         sid = r.json()["session_id"]
         session_r = client.get(f"/api/session/{sid}")
@@ -232,7 +232,7 @@ class TestSecurity:
     def test_prompt_injection_does_not_suppress_flags(self):
         pdf = make_injection_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("injection.pdf", pdf, "application/pdf"))
+            ("contract_files", ("injection.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code == 200, f"Injection test crashed server: {r.text[:500]}"
         analysis = r.json()["analysis"]
@@ -245,7 +245,7 @@ class TestSecurity:
     def test_huge_pdf_text_is_truncated_not_crashed(self):
         pdf = make_huge_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("huge.pdf", pdf, "application/pdf"))
+            ("contract_files", ("huge.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code != 500, f"Server crashed on large PDF: {r.text[:300]}"
         assert r.status_code in (200, 422)
@@ -253,7 +253,7 @@ class TestSecurity:
     def test_filename_with_path_traversal_is_safe(self):
         pdf = make_sample_contract_pdf()
         r = client.post("/api/analyze", files=[
-            ("files", ("../../etc/passwd.pdf", pdf, "application/pdf"))
+            ("contract_files", ("../../etc/passwd.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code != 500
 
@@ -277,7 +277,7 @@ class TestPerformance:
         pdf = make_sample_contract_pdf()
         start = time.time()
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", pdf, "application/pdf"))
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
         ], timeout=LLM_BUDGET)
         elapsed = time.time() - start
         assert r.status_code in (200, 504), f"Unexpected status after {elapsed:.1f}s: {r.status_code}"
@@ -291,7 +291,7 @@ class TestPerformance:
         for i in range(3):
             start = time.time()
             r = client.post("/api/analyze", files=[
-                ("files", (f"contract_{i}.pdf", pdf, "application/pdf"))
+                ("contract_files", (f"contract_{i}.pdf", pdf, "application/pdf"))
             ], timeout=LLM_BUDGET)
             elapsed = time.time() - start
             times.append(elapsed)
@@ -307,7 +307,7 @@ class TestEdgeCases:
     def test_pdf_with_only_whitespace_text(self):
         pdf = make_pdf("   \n\n   \n   ")
         r = client.post("/api/analyze", files=[
-            ("files", ("whitespace.pdf", pdf, "application/pdf"))
+            ("contract_files", ("whitespace.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code != 500
 
@@ -318,7 +318,7 @@ class TestEdgeCases:
             "Employee's obligations: 100%\n"
         )
         r = client.post("/api/analyze", files=[
-            ("files", ("special.pdf", pdf, "application/pdf"))
+            ("contract_files", ("special.pdf", pdf, "application/pdf"))
         ])
         assert r.status_code in (200, 422)
         if r.status_code == 200:
@@ -329,10 +329,142 @@ class TestEdgeCases:
         valid_pdf = make_sample_contract_pdf()
         fake_pdf = b"Not a PDF"
         r = client.post("/api/analyze", files=[
-            ("files", ("contract.pdf", valid_pdf, "application/pdf")),
-            ("files", ("fake.pdf", fake_pdf, "application/pdf")),
+            ("contract_files", ("contract.pdf", valid_pdf, "application/pdf")),
+            ("contract_files", ("fake.pdf", fake_pdf, "application/pdf")),
         ])
         assert r.status_code in (200, 400), f"Unexpected: {r.status_code}"
         if r.status_code == 200:
             data = r.json()
             assert data["docs_processed"] >= 1
+
+
+# ── AMENDMENT TESTS ───────────────────────────────────────────────────────────
+# These tests validate the dual-panel upload and dispute judgment features.
+# Requires the amended endpoint with contract_files / context_files parameters.
+
+class TestDualPanelUpload:
+    def test_contract_files_only_returns_insufficient_judgment(self):
+        """Panel A only → judgment must be INSUFFICIENT_INFORMATION."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", pdf, "application/pdf"))
+        ])
+        assert r.status_code == 200
+        j = r.json()["judgment"]
+        assert j["verdict"] == "INSUFFICIENT_INFORMATION"
+
+    def test_old_files_field_name_is_rejected_or_handled(self):
+        """The old 'files' field name should not silently succeed."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("files", ("contract.pdf", pdf, "application/pdf"))  # old field name
+        ])
+        assert r.status_code in (400, 422), (
+            f"Old 'files' field should be rejected, got {r.status_code}. "
+            "This means the field name migration broke the endpoint signature."
+        )
+
+    def test_context_only_no_contract_is_rejected(self):
+        """Panel B without Panel A should return 400."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("context_files", ("dispute.pdf", pdf, "application/pdf"))
+        ])
+        assert r.status_code == 400
+        assert "employment document" in r.json()["detail"].lower()
+
+    def test_txt_context_file_accepted(self):
+        """WhatsApp .txt export should be accepted in context_files."""
+        contract = make_sample_contract_pdf()
+        whatsapp_txt = b"28 May 2026 - HR: You must pay S$3000 or sign extension. Employee: I disagree."
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", contract, "application/pdf")),
+            ("context_files", ("whatsapp_export.txt", whatsapp_txt, "text/plain")),
+        ])
+        assert r.status_code == 200
+        assert r.json()["context_docs_processed"] == 1
+
+    def test_combined_file_count_limit(self):
+        """6 contract + 5 context = 11 total. Should return 400."""
+        pdf = make_sample_contract_pdf()
+        files = (
+            [("contract_files", (f"c{i}.pdf", pdf, "application/pdf")) for i in range(6)] +
+            [("context_files", (f"x{i}.pdf", pdf, "application/pdf")) for i in range(5)]
+        )
+        r = client.post("/api/analyze", files=files)
+        assert r.status_code == 400
+        assert "10" in r.json()["detail"]
+
+    def test_duplicate_file_in_both_panels_does_not_crash(self):
+        """Same file in both panels should not crash the server."""
+        pdf = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("contract.pdf", pdf, "application/pdf")),
+            ("context_files", ("contract.pdf", pdf, "application/pdf")),  # duplicate
+        ])
+        assert r.status_code in (200, 400)  # not 500
+        assert r.status_code != 500
+
+
+class TestJudgmentOutput:
+    def test_judgment_has_required_fields(self):
+        """Judgment JSON must have all required fields."""
+        contract = make_sample_contract_pdf()
+        context_bytes = b"Email: HR demanded S3000. Employee: I never signed the bond form."
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("c.pdf", contract, "application/pdf")),
+            ("context_files", ("email.txt", context_bytes, "text/plain")),
+        ])
+        assert r.status_code == 200
+        j = r.json()["judgment"]
+        for field in ["verdict", "confidence", "dispute_summary", "verdict_reasoning",
+                      "employer_conduct", "employee_conduct", "key_evidence",
+                      "recommended_forum"]:
+            assert field in j, f"Judgment missing required field: {field}"
+
+    def test_verdict_is_uppercase_enum(self):
+        """Verdict must be one of the valid uppercase enum values."""
+        contract = make_sample_contract_pdf()
+        context_bytes = b"WhatsApp: Employer demanded payment. Employee refused. MOM confirmed no obligation."
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("c.pdf", contract, "application/pdf")),
+            ("context_files", ("wa.txt", context_bytes, "text/plain")),
+        ])
+        assert r.status_code == 200
+        verdict = r.json()["judgment"]["verdict"]
+        valid = {"EMPLOYER_AT_FAULT", "EMPLOYEE_AT_FAULT", "BOTH_AT_FAULT", "INSUFFICIENT_INFORMATION"}
+        assert verdict in valid, f"Verdict '{verdict}' is not a valid enum value."
+
+    def test_judgment_saved_in_session(self):
+        """Session retrieval must include judgment field."""
+        contract = make_sample_contract_pdf()
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("c.pdf", contract, "application/pdf"))
+        ])
+        sid = r.json()["session_id"]
+        sr = client.get(f"/api/session/{sid}")
+        assert sr.status_code == 200
+        assert "judgment" in sr.json()
+        assert sr.json()["judgment"].get("verdict") is not None
+
+    def test_verdict_consistent_with_severity(self):
+        """CRITICAL employer violations + EMPLOYEE_AT_FAULT must note the contradiction."""
+        contract = make_sample_contract_pdf()
+        context_bytes = (
+            b"Meeting notes 28 May 2026: HR called employee in with 5 staff. "
+            b"Demanded payment of S$5725. Employee asked for clause reference. "
+            b"HR could not provide one. Employee consulted MOM. MOM confirmed no obligation."
+        )
+        r = client.post("/api/analyze", files=[
+            ("contract_files", ("c.pdf", contract, "application/pdf")),
+            ("context_files", ("notes.txt", context_bytes, "text/plain")),
+        ])
+        assert r.status_code == 200
+        data = r.json()
+        verdict = data["judgment"]["verdict"]
+        severity = data["analysis"]["overall_severity"]
+        if severity == "CRITICAL" and verdict == "EMPLOYEE_AT_FAULT":
+            assert data["judgment"].get("contradictions_noted"), (
+                "CRITICAL employer violations found but verdict is EMPLOYEE_AT_FAULT "
+                "with no contradictions_noted. Cross-validation failed."
+            )

@@ -22,11 +22,16 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create all three tables if they don't already exist (idempotent — PM10)."""
+    """Idempotent DB initialisation. Safe to call on every startup (PM10).
+
+    This is the FINAL schema. On a fresh DB it creates every column at once;
+    on an existing DB `CREATE TABLE IF NOT EXISTS` is a no-op and data is kept.
+    No ALTER TABLE here — see migrate_db() for upgrading old DBs.
+    """
+    os.makedirs(DB_PATH.parent, exist_ok=True)
     conn = get_conn()
     try:
-        c = conn.cursor()
-        c.execute("""
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS regulations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL UNIQUE,
@@ -34,20 +39,20 @@ def init_db() -> None:
                 content TEXT,
                 category TEXT,
                 scraped_at TEXT
-            )
-        """)
-        c.execute("""
+            );
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 created_at TEXT,
                 filenames TEXT,
+                context_filenames TEXT,
                 doc_count INTEGER,
+                context_doc_count INTEGER,
                 overall_severity TEXT,
+                verdict TEXT,
                 analysis TEXT,
+                judgment TEXT,
                 regulation_source TEXT
-            )
-        """)
-        c.execute("""
+            );
             CREATE TABLE IF NOT EXISTS scrape_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT,
@@ -55,13 +60,42 @@ def init_db() -> None:
                 method TEXT,
                 chars INTEGER,
                 scraped_at TEXT
-            )
+            );
         """)
         conn.commit()
     finally:
         conn.close()
 
 
+def migrate_db() -> None:
+    """Add columns missing from an old-schema sessions table. Call AFTER init_db().
+
+    Only the specific "duplicate column" OperationalError is swallowed (the
+    expected no-op when a column already exists). Any other DB error is re-raised
+    rather than silently eaten (PM4).
+    """
+    conn = get_conn()
+    migrations = [
+        "ALTER TABLE sessions ADD COLUMN judgment TEXT",
+        "ALTER TABLE sessions ADD COLUMN context_filenames TEXT",
+        "ALTER TABLE sessions ADD COLUMN context_doc_count INTEGER",
+        "ALTER TABLE sessions ADD COLUMN verdict TEXT",
+    ]
+    try:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                if "duplicate column" in str(e).lower():
+                    pass  # column already exists — expected
+                else:
+                    raise
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     init_db()
+    migrate_db()
     print(f"DB ok -> {DB_PATH}")

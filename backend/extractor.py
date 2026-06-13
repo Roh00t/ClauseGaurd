@@ -47,3 +47,37 @@ def extract_text(file_bytes: bytes, filename: str) -> dict:
             "pages": 0,
             "chars": 0,
         }
+
+
+def extract_context_text(file_bytes: bytes, filename: str) -> dict:
+    """Router for Dispute Context files. Dispatches by extension.
+
+    Accepts PDF (reuses extract_text), plus plain-text .txt/.eml (email threads,
+    WhatsApp exports). Returns the same structure as extract_text().
+    """
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+    if ext == "pdf":
+        # Validate magic bytes first (RT1) before handing to pdfplumber.
+        if file_bytes[:5] != b"%PDF-":
+            return {"filename": filename, "success": False,
+                    "error": "File does not appear to be a valid PDF.",
+                    "text": "", "pages": 0, "chars": 0}
+        return extract_text(file_bytes, filename)
+
+    if ext in ("txt", "eml"):
+        try:
+            text = file_bytes.decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            return {"filename": filename, "success": False,
+                    "error": str(e), "text": "", "pages": 0, "chars": 0}
+        if len(text) < 10:
+            return {"filename": filename, "success": False,
+                    "error": "File appears empty.", "text": "", "pages": 0, "chars": 0}
+        # Higher char budget than PDFs — no extraction overhead.
+        return {"filename": filename, "success": True,
+                "text": text[:12000], "pages": 1, "chars": len(text)}
+
+    return {"filename": filename, "success": False,
+            "error": f"Unsupported file type '.{ext}'. Context accepts: PDF, TXT, EML.",
+            "text": "", "pages": 0, "chars": 0}

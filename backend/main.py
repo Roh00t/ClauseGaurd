@@ -35,11 +35,13 @@ from slowapi.middleware import SlowAPIMiddleware
 
 load_dotenv()
 
-from backend.db import get_conn, init_db
+from backend.db import get_conn, init_db, migrate_db
 from backend.scraper import get_regulations
-from backend.extractor import extract_text
-from backend.analyzer import analyze_documents
-from backend.security import validate_file, MAX_FILES, MAX_TOTAL_SIZE_BYTES
+from backend.extractor import extract_text, extract_context_text
+from backend.analyzer import analyze_combined
+from backend.security import (
+    validate_file, MAX_FILES, MAX_TOTAL_SIZE_BYTES, MAX_FILE_SIZE_BYTES,
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -74,6 +76,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def _startup():
     init_db()
+    migrate_db()  # safe on both fresh and existing DBs
 
 
 # ── Static frontend ──────────────────────────────────────────────────────────
@@ -103,68 +106,107 @@ async def regulations():
 # ── Analyze ──────────────────────────────────────────────────────────────────
 @app.post("/api/analyze")
 @limiter.limit(RATE_LIMIT)
-async def analyze(request: Request, files: list[UploadFile] = File(...)):
-    """Accept up to 10 PDFs, validate, extract, run LLM analysis, persist."""
-    if not files:
-        raise HTTPException(400, "No files provided.")
-    if len(files) > MAX_FILES:
-        raise HTTPException(400, f"Too many files — maximum {MAX_FILES} per request.")
+async def analyze(
+    request: Request,
+    contract_files: list[UploadFile] = File(default=[]),
+    context_files: list[UploadFile] = File(default=[]),
+):
+    """Dual-panel upload -> ONE combined analysis+judgment LLM call -> persist.
 
-    # 1. Read + validate every file (extension, magic bytes, size). RT1/RT2.
-    documents = []
-    errors = []
+    Panel A (contract_files) is required (employment docs, PDF only). Panel B
+    (context_files) is optional (dispute context: PDF/TXT/EML). With no context,
+    the judgment comes back INSUFFICIENT_INFORMATION.
+    """
+    # ── 1. Validate counts (combined total — PM13/RT4) ─────────────────────
+    total_files = len(contract_files) + len(context_files)
+    if total_files == 0:
+        raise HTTPException(400, "No files uploaded. Please select at least one employment document.")
+    if len(contract_files) == 0:
+        raise HTTPException(400, "At least one employment document is required in the Employment Documents panel.")
+    if total_files > MAX_FILES:
+        raise HTTPException(400, f"Maximum {MAX_FILES} files total ({total_files} submitted). Please reduce your selection.")
+
+    # ── 2. Read + validate contract files (PDF only). Pass RAW text; the
+    #       analyzer does the single untrusted-data wrapping + dedup. ────────
+    contract_docs = []
+    contract_errors = []
     total_bytes = 0
-    for f in files:
-        raw = await f.read()
-        total_bytes += len(raw)
+    for f in contract_files:
+        content = await f.read()
+        total_bytes += len(content)
         if total_bytes > MAX_TOTAL_SIZE_BYTES:
             raise HTTPException(413, "Total upload exceeds 50MB limit.")
-        validate_file(f.filename, raw)  # raises HTTPException on violation
-        result = extract_text(raw, f.filename)
-        if result["success"]:
-            documents.append({"filename": f.filename, "text": result["text"]})
+        validate_file(f.filename, content)  # raises HTTPException on violation
+        result = extract_text(content, f.filename)
+        if result["success"] and result["chars"] > 0:
+            contract_docs.append({"filename": f.filename, "text": result["text"]})
         else:
-            errors.append({"filename": f.filename, "error": result["error"]})
+            contract_errors.append({"filename": f.filename, "error": result.get("error", "No text extracted")})
 
-    if not documents:
+    if not contract_docs:
         raise HTTPException(422, detail={
-            "message": "No text could be extracted from any uploaded file. "
-                       "Image-only/scanned PDFs aren't supported — use a text-layer PDF.",
-            "errors": errors,
+            "message": "No text could be extracted from any employment document.",
+            "tip": "Ensure your PDFs are text-based (not scanned images). Scanned documents require OCR first.",
+            "errors": contract_errors,
         })
 
-    # 2. Load MOM regulations (cached, fast after first scrape).
+    # ── 3. Read + validate context files (PDF/TXT/EML). Empty is valid. ─────
+    context_docs = []
+    context_errors = []
+    for f in context_files:
+        content = await f.read()
+        total_bytes += len(content)
+        if total_bytes > MAX_TOTAL_SIZE_BYTES:
+            raise HTTPException(413, "Total upload exceeds 50MB limit.")
+        if len(content) > MAX_FILE_SIZE_BYTES:
+            context_errors.append({"filename": f.filename, "error": f"Exceeds {MAX_FILE_SIZE_BYTES // 1024 // 1024}MB limit"})
+            continue
+        result = extract_context_text(content, f.filename)  # filters empty/zero-text (PM9)
+        if result["success"] and result["chars"] > 0:
+            context_docs.append({"filename": f.filename, "text": result["text"]})
+        else:
+            context_errors.append({"filename": f.filename, "error": result.get("error", "No text extracted")})
+
+    # ── 4. Load MOM regulations (cached, fast after first scrape). ──────────
     reg_data = get_regulations()
     regs = reg_data.get("regulations", [])
 
-    # 3. LLM analysis. Timeouts surface as 504, never a frozen spinner (PM8).
+    # ── 5. ONE combined LLM call. Timeouts -> 504, never a frozen spinner. ──
     try:
-        analysis = analyze_documents(documents, regs)
+        combined = analyze_combined(contract_docs, context_docs, regs)
+    except TimeoutError:
+        raise HTTPException(504, "Analysis timed out. Please try again with fewer or smaller documents.")
     except ValueError as e:
-        raise HTTPException(502, detail=f"The analyser returned malformed output. {e}")
+        raise HTTPException(502, detail=f"Analysis returned an unexpected format: {e}")
     except EnvironmentError as e:
         raise HTTPException(500, detail=str(e))
     except Exception as e:
-        name = type(e).__name__.lower()
-        if "timeout" in name:
-            raise HTTPException(504, detail="Analysis timed out — please try again.")
         raise HTTPException(500, detail=f"Analysis error: {e}")
 
-    # 4. Persist the session (parameterised — RT8).
+    analysis = combined["analysis"]
+    judgment = combined["judgment"]
+    duplicate_warnings = combined.get("duplicate_warnings", [])
+
+    # ── 6. Persist the session (parameterised — RT8). ──────────────────────
     session_id = uuid.uuid4().hex[:8]
     conn = get_conn()
     try:
         conn.execute("""
             INSERT INTO sessions
-                (id, created_at, filenames, doc_count, overall_severity, analysis, regulation_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, created_at, filenames, context_filenames, doc_count, context_doc_count,
+                 overall_severity, verdict, analysis, judgment, regulation_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             datetime.now().isoformat(),
-            json.dumps([f.filename for f in files]),
-            len(documents),
+            json.dumps([f.filename for f in contract_files]),
+            json.dumps([f.filename for f in context_files]),
+            len(contract_docs),
+            len(context_docs),
             analysis.get("overall_severity", "MODERATE"),
+            judgment.get("verdict", "INSUFFICIENT_INFORMATION"),
             json.dumps(analysis),
+            json.dumps(judgment),
             reg_data.get("source"),
         ))
         conn.commit()
@@ -173,11 +215,13 @@ async def analyze(request: Request, files: list[UploadFile] = File(...)):
 
     return {
         "session_id": session_id,
-        "docs_processed": len(documents),
-        "docs_failed": len(errors),
-        "extraction_errors": errors,
+        "docs_processed": len(contract_docs),
+        "context_docs_processed": len(context_docs),
+        "extraction_errors": contract_errors + context_errors,
+        "duplicate_files_excluded": duplicate_warnings,
         "regulation_source": reg_data.get("source"),
         "analysis": analysis,
+        "judgment": judgment,
     }
 
 
@@ -187,7 +231,7 @@ async def sessions():
     conn = get_conn()
     try:
         rows = conn.execute("""
-            SELECT id, created_at, filenames, doc_count, overall_severity
+            SELECT id, created_at, filenames, doc_count, overall_severity, verdict
             FROM sessions ORDER BY created_at DESC LIMIT 30
         """).fetchall()
     finally:
@@ -196,7 +240,13 @@ async def sessions():
     for r in rows:
         d = dict(r)
         d["filenames"] = json.loads(d.get("filenames") or "[]")
-        out.append(d)
+        out.append({
+            "id": d["id"],
+            "created_at": d["created_at"],
+            "filenames": d["filenames"],
+            "overall_severity": d.get("overall_severity"),
+            "verdict": d.get("verdict"),  # shown in sidebar
+        })
     return out
 
 
@@ -210,9 +260,14 @@ async def session(sid: str):
     if not row:
         raise HTTPException(404, "Session not found.")
     d = dict(row)
-    d["filenames"] = json.loads(d.get("filenames") or "[]")
-    d["analysis"] = json.loads(d.get("analysis") or "{}")
-    return d
+    return {
+        "id": d["id"],
+        "created_at": d["created_at"],
+        "filenames": json.loads(d.get("filenames") or "[]"),
+        "context_filenames": json.loads(d.get("context_filenames") or "[]"),
+        "analysis": json.loads(d.get("analysis") or "{}"),
+        "judgment": json.loads(d.get("judgment") or "{}"),  # PM5: was missing
+    }
 
 
 # Mount static assets last so it never shadows the API routes.

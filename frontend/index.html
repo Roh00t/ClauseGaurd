@@ -262,6 +262,20 @@ body{
 }
 .clear-btn:hover{border-color:var(--text-3)}
 
+/* ── DUAL UPLOAD PANELS ───────────────────────────────────────── */
+.upload-section{border-top:1px solid var(--border);padding:12px 16px;flex-shrink:0}
+.upload-panels{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px}
+@media(max-width:700px){.upload-panels{grid-template-columns:1fr}}
+.panel-header{
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:6px;display:flex;align-items:center;gap:6px;
+}
+.panel-required{color:var(--accent)}
+.panel-optional{color:var(--text-3)}
+.panel-b-indicator{font-size:11px;margin-top:5px;color:var(--text-3);min-height:16px}
+.panel-b-indicator.has-files{color:#22c55e}
+.panel-tip{font-size:11px;color:var(--text-3);margin-top:4px}
+
 /* ── ANALYSIS OUTPUT ────────────────────────────────────────── */
 .analysis-area{
   padding:24px;
@@ -656,27 +670,53 @@ body{
     <div class="analysis-area" id="analysisArea" style="display:none"></div>
   </div>
 
-  <!-- Upload bar -->
-  <div class="upload-bar">
-    <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-      <div class="drop-zone-text">
-        <svg style="display:inline;margin-right:6px;vertical-align:middle" width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M8 11V3M5 6l3-3 3 3" stroke="#999" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M2 13h12" stroke="#999" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        Drop PDFs here or click to browse
+  <!-- Dual upload section -->
+  <div class="upload-section">
+    <div class="upload-panels">
+
+      <!-- Panel A — Employment Documents (required, PDF) -->
+      <div>
+        <div class="panel-header panel-required">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <path d="M3 1h6l3 3v9H3V1z" stroke="#d97706" stroke-width="1.3" stroke-linejoin="round"/>
+            <path d="M9 1v3h3" stroke="#d97706" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+          Employment Documents · Required
+        </div>
+        <div class="drop-zone" id="dropZoneA" onclick="document.getElementById('fileInputA').click()">
+          <div class="drop-zone-text">Drop PDFs here or click to browse</div>
+          <div class="drop-zone-sub">LOA, contract, training form, payslip, appointment letter</div>
+        </div>
+        <input type="file" id="fileInputA" multiple accept=".pdf" onchange="handleContractFiles(this.files)"/>
+        <div class="file-chips" id="fileChipsA"></div>
       </div>
-      <div class="drop-zone-sub">Supports multiple files · LOA, Training Form, Dispute Record, etc.</div>
+
+      <!-- Panel B — Dispute Context (optional, PDF/TXT/EML) -->
+      <div>
+        <div class="panel-header panel-optional">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <path d="M2 3h10v7H6l-3 2v-2H2V3z" stroke="#999" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+          Dispute Context · Optional
+        </div>
+        <div class="drop-zone" id="dropZoneB" onclick="document.getElementById('fileInputB').click()">
+          <div class="drop-zone-text">Drop files here or click to browse</div>
+          <div class="drop-zone-sub">Emails, WhatsApp exports (.txt), dispute records · PDF, TXT, EML</div>
+        </div>
+        <input type="file" id="fileInputB" multiple accept=".pdf,.txt,.eml" onchange="handleContextFiles(this.files)"/>
+        <div class="file-chips" id="fileChipsB"></div>
+        <div class="panel-b-indicator" id="panelBIndicator">Add context for a dispute verdict</div>
+        <div class="panel-tip">Tip: put emails, chat logs, and meeting records in Dispute Context</div>
+      </div>
+
     </div>
-    <input type="file" id="fileInput" multiple accept=".pdf" onchange="handleFiles(this.files)"/>
-    <div class="file-chips" id="fileChips"></div>
-    <div class="upload-actions" id="uploadActions" style="display:none">
-      <button class="analyze-btn" id="analyzeBtn" onclick="runAnalysis()">
+    <div class="upload-actions">
+      <button class="analyze-btn" id="analyzeBtn" onclick="runAnalysis()" disabled>
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <circle cx="7" cy="7" r="5.5" stroke="#fff" stroke-width="1.4"/>
           <path d="M5 7l1.5 1.5L9 5" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        Analyse Documents
+        Analyse Everything
       </button>
       <button class="clear-btn" onclick="clearFiles()">Clear all</button>
     </div>
@@ -696,7 +736,8 @@ body{
 
 <script>
 // ── STATE ────────────────────────────────────────────────────
-let pendingFiles = [];
+let contractFiles = [];   // Panel A — employment documents
+let contextFiles = [];    // Panel B — dispute context
 let currentSession = null;
 
 // ── INIT ─────────────────────────────────────────────────────
@@ -736,14 +777,22 @@ async function loadSessions() {
       list.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-3)">No sessions yet</div>';
       return;
     }
+    const verdictLabel = {
+      'EMPLOYER_AT_FAULT':        { text: 'Employer', color: '#22c55e' },
+      'EMPLOYEE_AT_FAULT':        { text: 'Employee', color: '#ef4444' },
+      'BOTH_AT_FAULT':            { text: 'Both', color: '#eab308' },
+      'INSUFFICIENT_INFORMATION': { text: 'No verdict', color: '#666' },
+    };
     list.innerHTML = sessions.map(s => {
       const files = (s.filenames || []).join(', ') || 'Unknown files';
       const date = new Date(s.created_at).toLocaleString('en-SG', {
         month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
       });
+      const vl = verdictLabel[s.verdict] || verdictLabel['INSUFFICIENT_INFORMATION'];
       return `<div class="session-item" onclick="loadSession('${s.id}')">
         <div class="session-date">${date}</div>
-        <div class="session-files">${files}</div>
+        <div class="session-files">${esc(files)}</div>
+        <span style="font-size:10px;font-weight:700;color:${vl.color}">⚖ ${vl.text}</span>
       </div>`;
     }).join('');
   } catch {}
@@ -755,47 +804,77 @@ async function loadSession(id) {
     const r = await fetch(`/api/session/${id}`);
     const d = await r.json();
     hideLoading();
-    renderAnalysis(d.analysis, d.filenames || []);
+    // CRITICAL (PM5): pass the combined object so the judgment renders too.
+    renderAnalysis(
+      { analysis: d.analysis, judgment: d.judgment },
+      d.filenames || [],
+      d.context_filenames || [],
+    );
   } catch(e) {
     hideLoading();
-    showToast('Failed to load session.');
+    showToast('Failed to load session. The server may be restarting.');
   }
 }
 
 // ── FILES ────────────────────────────────────────────────────
-function handleFiles(files) {
+function _chipHtml(f, removeFn, i) {
+  return `<div class="chip">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <path d="M3 1h5l3 3v7H3V1z" stroke="#999" stroke-width="1" stroke-linejoin="round"/>
+    </svg>
+    ${esc(f.name)}
+    <button class="chip-remove" onclick="${removeFn}(${i})">×</button>
+  </div>`;
+}
+
+function handleContractFiles(files) {
   for (const f of files) {
-    if (!pendingFiles.find(p => p.name === f.name)) {
-      pendingFiles.push(f);
-    }
+    if (!contractFiles.find(p => p.name === f.name)) contractFiles.push(f);
   }
-  renderChips();
+  renderContractChips();
+}
+function handleContextFiles(files) {
+  for (const f of files) {
+    if (!contextFiles.find(p => p.name === f.name)) contextFiles.push(f);
+  }
+  renderContextChips();
 }
 
-function renderChips() {
-  const chips = document.getElementById('fileChips');
-  const actions = document.getElementById('uploadActions');
-  chips.innerHTML = pendingFiles.map((f,i) => `
-    <div class="chip">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-        <path d="M3 1h5l3 3v7H3V1z" stroke="#999" stroke-width="1" stroke-linejoin="round"/>
-      </svg>
-      ${f.name}
-      <button class="chip-remove" onclick="removeFile(${i})">×</button>
-    </div>
-  `).join('');
-  actions.style.display = pendingFiles.length ? 'flex' : 'none';
+function renderContractChips() {
+  document.getElementById('fileChipsA').innerHTML =
+    contractFiles.map((f,i) => _chipHtml(f, 'removeContractFile', i)).join('');
+  updateAnalyzeButton();
+}
+function renderContextChips() {
+  document.getElementById('fileChipsB').innerHTML =
+    contextFiles.map((f,i) => _chipHtml(f, 'removeContextFile', i)).join('');
+  updateContextIndicator();
 }
 
-function removeFile(i) {
-  pendingFiles.splice(i, 1);
-  renderChips();
+function removeContractFile(i) { contractFiles.splice(i,1); renderContractChips(); }
+function removeContextFile(i)  { contextFiles.splice(i,1);  renderContextChips(); }
+
+function updateAnalyzeButton() {
+  document.getElementById('analyzeBtn').disabled = contractFiles.length === 0;
+}
+function updateContextIndicator() {
+  const el = document.getElementById('panelBIndicator');
+  if (contextFiles.length) {
+    el.classList.add('has-files');
+    el.textContent = '⚖ Dispute judgment will be included';
+  } else {
+    el.classList.remove('has-files');
+    el.textContent = 'Add context for a dispute verdict';
+  }
 }
 
 function clearFiles() {
-  pendingFiles = [];
-  renderChips();
-  document.getElementById('fileInput').value = '';
+  contractFiles = [];
+  contextFiles = [];
+  renderContractChips();
+  renderContextChips();
+  document.getElementById('fileInputA').value = '';
+  document.getElementById('fileInputB').value = '';
 }
 
 function newAnalysis() {
@@ -806,28 +885,39 @@ function newAnalysis() {
 }
 
 // ── DRAG & DROP ──────────────────────────────────────────────
-function setupDragDrop() {
-  const zone = document.getElementById('dropZone');
+function _wireDrop(zoneId, handler) {
+  const zone = document.getElementById(zoneId);
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
   zone.addEventListener('drop', e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    handleFiles(e.dataTransfer.files);
+    handler(e.dataTransfer.files);
   });
+}
+function setupDragDrop() {
+  _wireDrop('dropZoneA', handleContractFiles);
+  _wireDrop('dropZoneB', handleContextFiles);
 }
 
 // ── ANALYSIS ─────────────────────────────────────────────────
 async function runAnalysis() {
-  if (!pendingFiles.length) return;
+  if (!contractFiles.length) {
+    showToast('Add at least one employment document to the Employment Documents panel.');
+    return;
+  }
   const btn = document.getElementById('analyzeBtn');
   btn.disabled = true;
 
+  // Capture filenames now — clearFiles() empties the arrays after success.
+  const contractNames = contractFiles.map(f => f.name);
+  const contextNames = contextFiles.map(f => f.name);
+
   const steps = [
-    ['Extracting text from PDFs…', 'Reading document structure'],
-    ['Loading MOM regulation database…', 'Checking cache validity'],
-    ['Running employment law analysis…', 'Identifying red flags & malpractice'],
-    ['Generating MOM report draft…', 'Finalising recommendations'],
+    ['Extracting document text…', 'Reading PDFs, emails and chat logs'],
+    ['Loading MOM regulations…', 'Checking cache validity'],
+    ['Analysing red flags & judging the dispute…', 'One combined reasoning pass'],
+    ['Generating verdict & MOM report…', 'Finalising recommendations'],
   ];
   let stepIdx = 0;
   showLoading(steps[0][0], steps[0][1]);
@@ -839,7 +929,8 @@ async function runAnalysis() {
 
   try {
     const form = new FormData();
-    for (const f of pendingFiles) form.append('files', f);
+    for (const f of contractFiles) form.append('contract_files', f);
+    for (const f of contextFiles)  form.append('context_files', f);
 
     const r = await fetch('/api/analyze', { method: 'POST', body: form });
     clearInterval(stepTimer);
@@ -847,21 +938,20 @@ async function runAnalysis() {
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       hideLoading();
-      btn.disabled = false;
+      updateAnalyzeButton();
       showToast(err.detail?.message || err.detail || 'Analysis failed.');
       return;
     }
 
     const data = await r.json();
     hideLoading();
-    btn.disabled = false;
     clearFiles();
-    renderAnalysis(data.analysis, pendingFiles.map(f=>f.name));
+    renderAnalysis({ analysis: data.analysis, judgment: data.judgment }, contractNames, contextNames);
     await loadSessions();
   } catch(e) {
     clearInterval(stepTimer);
     hideLoading();
-    btn.disabled = false;
+    updateAnalyzeButton();
     showToast('Network error. Is the backend running?');
   }
 }
@@ -883,7 +973,98 @@ function esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function renderAnalysis(a, filenames) {
+function renderJudgment(judgment) {
+  // Null safety (RT6) — old sessions may not have a judgment.
+  if (!judgment || !judgment.verdict) {
+    return `<div class="msg" style="color:var(--text-3);font-size:13px">
+      Dispute judgment not available for this session. Re-run analysis to generate.
+    </div>`;
+  }
+  const verdict = (judgment.verdict || 'INSUFFICIENT_INFORMATION').toUpperCase();
+  const confidence = (judgment.confidence || 'LOW').toUpperCase();
+
+  // COLOUR CODING — NOT amber (amber is the app accent). PM6.
+  const verdictMeta = {
+    'EMPLOYER_AT_FAULT':        { bg:'rgba(34,197,94,.12)',  border:'rgba(34,197,94,.35)',  color:'#22c55e', label:'Employer At Fault' },
+    'EMPLOYEE_AT_FAULT':        { bg:'rgba(239,68,68,.12)',  border:'rgba(239,68,68,.35)',  color:'#ef4444', label:'Employee At Fault' },
+    'BOTH_AT_FAULT':            { bg:'rgba(234,179,8,.12)',  border:'rgba(234,179,8,.35)',  color:'#eab308', label:'Both Parties At Fault' },
+    'INSUFFICIENT_INFORMATION': { bg:'rgba(120,120,120,.1)', border:'rgba(120,120,120,.25)',color:'#888',   label:'Insufficient Information' },
+  };
+  const meta = verdictMeta[verdict] || verdictMeta['INSUFFICIENT_INFORMATION'];
+  const confidenceDots = { 'HIGH':'●●●', 'MEDIUM':'●●○', 'LOW':'●○○' }[confidence] || '●○○';
+
+  const isLowConf = confidence === 'LOW';
+  const containerStyle = isLowConf
+    ? `background:${meta.bg};border:1px solid ${meta.border};opacity:.75`
+    : `background:${meta.bg};border:1px solid ${meta.border}`;
+
+  let conductHtml = '';
+  if (verdict !== 'INSUFFICIENT_INFORMATION') {
+    const emp = judgment.employer_conduct || {};
+    const empe = judgment.employee_conduct || {};
+    conductHtml = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px">
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:12px">
+          <div class="section-h" style="font-size:10px;margin-bottom:8px">Employer Conduct</div>
+          ${(emp.problematic||[]).map(x=>`<div style="font-size:12px;color:#f97316;margin-bottom:4px">⚠ ${esc(x)}</div>`).join('')}
+          ${(emp.defensible||[]).map(x=>`<div style="font-size:12px;color:var(--text-2);margin-bottom:4px">✓ ${esc(x)}</div>`).join('')}
+        </div>
+        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:12px">
+          <div class="section-h" style="font-size:10px;margin-bottom:8px">Employee Conduct</div>
+          ${(empe.problematic||[]).map(x=>`<div style="font-size:12px;color:#f97316;margin-bottom:4px">⚠ ${esc(x)}</div>`).join('')}
+          ${(empe.defensible||[]).map(x=>`<div style="font-size:12px;color:var(--text-2);margin-bottom:4px">✓ ${esc(x)}</div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  const keyEvidence = (judgment.key_evidence || []);
+  const forumHtml = judgment.recommended_forum
+    ? `<div style="margin-top:14px;padding:10px 12px;background:rgba(96,165,250,.08);border:1px solid rgba(96,165,250,.2);border-radius:6px;font-size:12px;color:var(--blue)">
+        <strong>Recommended forum:</strong> ${esc(judgment.recommended_forum)} — ${esc(judgment.forum_reasoning||'')}
+       </div>` : '';
+  const contradictionNote = judgment.contradictions_noted
+    ? `<div style="margin-top:10px;padding:8px 12px;background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.25);border-radius:4px;font-size:12px;color:var(--yellow)">
+        ⚠ Note: ${esc(judgment.contradictions_noted)}
+       </div>` : '';
+  const changeNote = judgment.what_would_change_verdict
+    ? `<div style="margin-top:10px;font-size:11px;color:var(--text-3)">What would change this verdict: ${esc(judgment.what_would_change_verdict)}</div>` : '';
+  const lowConfNote = isLowConf
+    ? `<div style="font-size:11px;color:var(--text-3);margin-top:6px">Low confidence — add more dispute context documents for a stronger assessment.</div>` : '';
+
+  return `<div class="msg">
+    <div class="msg-header">
+      <div class="msg-icon">⚖</div>
+      <span>Dispute Judgment</span>
+    </div>
+    <div style="${containerStyle};border-radius:8px;padding:16px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <span style="font-size:18px;font-weight:800;color:${meta.color}">${esc(meta.label)}</span>
+        <span style="font-size:13px;color:var(--text-3)">${confidenceDots} ${confidence} CONFIDENCE</span>
+      </div>
+      ${lowConfNote}
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:var(--text-2)">What this dispute is about:</div>
+      <div style="font-size:13px;line-height:1.65;margin-bottom:12px">${esc(judgment.dispute_summary||'')}</div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;color:var(--text-2)">Why this verdict:</div>
+      <div style="font-size:13px;line-height:1.65">${esc(judgment.verdict_reasoning||'')}</div>
+      ${contradictionNote}
+      ${conductHtml}
+      ${keyEvidence.length ? `<div style="margin-top:14px">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:8px">Key Evidence</div>
+        ${keyEvidence.map(e=>`<div style="font-size:12px;color:var(--text-2);margin-bottom:4px">· ${esc(e)}</div>`).join('')}
+      </div>` : ''}
+      ${forumHtml}
+      ${changeNote}
+    </div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      ⚠ AI-generated assessment for reference only. Not legal advice.
+      Consult <a href="https://probono.sg" target="_blank" style="color:var(--accent)">Law Society Pro Bono</a> for legal advice.
+    </div>
+  </div>`;
+}
+
+function renderAnalysis(data, contractFilenames, contextFilenames) {
+  const a = (data && data.analysis) || {};
+  const judgment = (data && data.judgment) || null;
   document.getElementById('emptyState').style.display = 'none';
   const area = document.getElementById('analysisArea');
   area.style.display = '';
@@ -892,6 +1073,9 @@ function renderAnalysis(a, filenames) {
   const sevClass = `sev-${sev.toLowerCase()}`;
 
   let html = '';
+
+  // ── 0. DISPUTE JUDGMENT (verdict first) ─────────────────────
+  html += renderJudgment(judgment);
 
   // ── 1. EXECUTIVE SUMMARY ────────────────────────────────────
   html += `<div class="msg">

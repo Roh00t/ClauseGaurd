@@ -1,14 +1,32 @@
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-python-multipart==0.0.12
-pdfplumber==0.11.4
-requests==2.32.3
-beautifulsoup4==4.12.3
-anthropic>=0.36.0
-openai>=1.50.0
-python-dotenv==1.0.1
-slowapi>=0.1.9
-# test-only
-fpdf2>=2.7.0
-httpx>=0.27.0
-pytest>=8.0.0
+# ── ClauseGuard v2 — Python Dependencies ──────────────────────────────────────
+# Install: python3 -m pip install -r requirements.txt --break-system-packages
+# Runtime: Python 3.11+ (tested on 3.13 Homebrew macOS)
+# Never use bare `pip` — it points to a different Python on macOS.
+
+# ── Core Server ───────────────────────────────────────────────────────────────
+fastapi>=0.115.0,<1.0.0           # Web framework — do not pin starlette separately
+uvicorn[standard]>=0.32.0         # ASGI server — [standard] includes websockets + watchfiles
+python-multipart>=0.0.20          # Multipart file upload — 0.0.20+ fixes CVE-2024-24762
+
+# ── File Processing ───────────────────────────────────────────────────────────
+pdfplumber>=0.11.9                # PDF text extraction (uses pdfminer under the hood)
+
+# ── Web Scraping ──────────────────────────────────────────────────────────────
+requests>=2.33.0                  # HTTP client for MOM scraper fallback
+beautifulsoup4>=4.14.0            # HTML parser for scraped MOM pages
+lxml>=5.0.0                       # Fast BS4 parser backend — required for reliable parsing
+
+# ── AI / LLM ─────────────────────────────────────────────────────────────────
+anthropic>=0.40.0                 # Primary: claude-sonnet-4-6 via Anthropic API
+openai>=1.55.0                    # Fallback: TokenRouter / Kimi K2.6 (OpenAI-compatible)
+
+# ── Security & Rate Limiting ──────────────────────────────────────────────────
+slowapi>=0.1.9                    # Rate limiting (5 req/min per IP on /api/analyze)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.1.0              # .env file loading for API keys
+
+# ── Test Dependencies (not needed in production) ──────────────────────────────
+fpdf2>=2.7.9                      # Generate synthetic PDFs for automated tests
+httpx>=0.27.0                     # Async HTTP client — required by FastAPI TestClient
+pytest>=8.3.0                     # Test runner
