@@ -8,9 +8,12 @@ consistency is what lets the analyzer detect cross-document contradictions
 ("the form signed by [PERSON_1] contradicts [PERSON_1]'s LOA") instead of seeing
 the same person as two different anonymous tokens.
 
-Two detection passes, union'd:
+Three detection passes, union'd:
   1. Regex (reused verbatim from src/redactor.py) — NRIC, EMAIL, PHONE, ADDRESS.
      Reliable, deterministic.
+  1.5 Singapore company-name suffix regex — catches "Acme Staffing Pte Ltd",
+     "Xcellink Technologies", etc. that en_core_web_sm frequently misses.
+     Uses the same ORG counter as pass 2 so placeholders are globally consistent.
   2. spaCy en_core_web_sm NER — PERSON, ORG. Catches names in prose / company
      names that regex cannot. Small model: best-effort, occasionally mislabels
      (e.g. a person as ORG) or misses an entity — disclosed in the UI banner.
@@ -34,6 +37,21 @@ _NER_STOPWORDS = {
     "company", "employee", "employer", "designation", "employee particulars",
     "schedule", "contract", "appointment", "salary", "the company",
 }
+
+# ── INSERTION 1 ────────────────────────────────────────────────────────────────
+# Singapore company-name suffix regex.
+# Catches names like "Acme Staffing Pte Ltd" or "Xcellink Technologies" that
+# en_core_web_sm (a small model) frequently misses or labels inconsistently.
+# Shares the "ORG" counter in build_entity_map so [ORG_N] numbering is globally
+# consistent across this pass and the spaCy pass.
+_SG_COMPANY_RE = re.compile(
+    r'\b[A-Z][A-Za-z0-9 &\-\'\.]{1,40}'
+    r'\s+(?:Pte\.?\s*Ltd\.?|Sdn\.?\s*Bhd\.?|Ltd\.?|Inc\.?|Corp\.?|'
+    r'LLP|Group|Holdings|Ventures|Services|Solutions|'
+    r'Staffing|Consulting|Technology|Technologies|Systems|'
+    r'Management|Capital|Partners|Associates|Enterprise|Enterprises)\b'
+)
+# ── END INSERTION 1 ────────────────────────────────────────────────────────────
 
 
 def _is_noise_entity(text: str) -> bool:
@@ -89,6 +107,17 @@ def build_entity_map(texts: list) -> dict:
         for m in rx.finditer(combined):
             assign(m.group(0), label)
 
+    # ── INSERTION 2 ────────────────────────────────────────────────────────────
+    # 1.5 Singapore company-name suffix regex.
+    # Runs after the NRIC/email/phone/address pass and before spaCy, so if spaCy
+    # also catches the same name, assign()'s "already in emap" guard is a no-op.
+    # Uses "ORG" so [ORG_N] numbering is shared with the spaCy pass below —
+    # never resets counters here.
+    for m in _SG_COMPANY_RE.finditer(combined):
+        if not _is_noise_entity(m.group(0)):
+            assign(m.group(0), "ORG")
+    # ── END INSERTION 2 ────────────────────────────────────────────────────────
+
     # 2. NER entities (PERSON / ORG). Best-effort.
     try:
         doc = _get_nlp()(combined)
@@ -122,6 +151,7 @@ def invert_entity_map(emap: dict) -> dict:
 
 
 if __name__ == "__main__":
+    # Original acceptance test
     texts = [
         "Isabel Lim is the HR Director. Contact: isabel@xcellinkgroup.com, T0174455G",
         "As confirmed by Isabel Lim in meeting on 28 May 2026...",
@@ -130,9 +160,20 @@ if __name__ == "__main__":
     print("entity_map:", emap)
     print("\nredacted text 1:", apply_entity_map(texts[0], emap))
     print("redacted text 2:", apply_entity_map(texts[1], emap))
-    # The actual acceptance criterion: same entity -> same placeholder in both.
     ph = emap.get("Isabel Lim")
     print("\n'Isabel Lim' placeholder:", ph)
     print("consistent across both:",
           ph and ph in apply_entity_map(texts[0], emap)
           and ph in apply_entity_map(texts[1], emap))
+
+    # New: company-name regex test
+    print("\n--- Company name regex test ---")
+    company_texts = [
+        "Acme Staffing Pte Ltd signed the training bond on 25 May.",
+        "The form processed by Acme Staffing Pte Ltd was not sent to the employee.",
+    ]
+    emap2 = build_entity_map(company_texts)
+    print("entity_map:", emap2)
+    assert "Acme Staffing Pte Ltd" in emap2, "FAIL — company not caught"
+    ph2 = emap2["Acme Staffing Pte Ltd"]
+    print(f"Acme Staffing Pte Ltd -> {ph2} : PASS")
