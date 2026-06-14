@@ -4,6 +4,13 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>ClauseGuard — Employment Contract Analyser</title>
+<!-- Phase 2: idb (Promise-based IndexedDB wrapper, ~5KB) via CDN. Exposed on
+     window so non-module inline scripts can use it for storage-availability checks. -->
+<script type="module">
+  import { openDB } from 'https://cdn.jsdelivr.net/npm/idb@8/build/index.js';
+  window._idbLib = { openDB };
+  window.dispatchEvent(new Event('idb-ready'));
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
@@ -631,6 +638,15 @@ body{
   </div>
 
   <div class="sidebar-footer">
+    <button id="clear-data-btn" title="Delete all sessions from this browser"
+      style="width:100%;padding:8px;background:transparent;color:var(--text-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);font:600 12px var(--font);cursor:pointer;margin-bottom:10px">
+      🗑 Clear my data
+    </button>
+    <div style="font-size:11px;color:var(--text-3);line-height:1.5;margin-bottom:8px">
+      Sessions are stored in <strong>this browser only</strong> — not on our servers.
+      Using a shared or public computer? Click "Clear my data" when done, or use a
+      private/incognito window.
+    </div>
     Data sourced from mom.gov.sg · For reference only
   </div>
 </aside>
@@ -646,6 +662,9 @@ body{
       <span id="regLabel">Checking MOM regulations…</span>
     </div>
   </div>
+
+  <!-- Phase 2: shown only if IndexedDB is unavailable (private/incognito). -->
+  <div id="storageBanner" style="display:none;padding:10px 20px;background:rgba(234,179,8,.12);border-bottom:1px solid rgba(234,179,8,.35);color:#eab308;font-size:13px;flex-shrink:0"></div>
 
   <div class="content-area" id="contentArea">
     <!-- Empty state shown initially -->
@@ -742,9 +761,51 @@ let currentSession = null;
 
 // ── INIT ─────────────────────────────────────────────────────
 async function init() {
+  await checkStorageAvailability();
   await loadRegStatus();
   await loadSessions();
   setupDragDrop();
+  setupClearData();
+}
+
+function showBanner(msg) {
+  const b = document.getElementById('storageBanner');
+  if (!b) return;
+  b.textContent = msg;
+  b.style.display = 'block';
+}
+
+// Phase 2: best-effort private/incognito detection. Not 100% reliable across
+// browsers (many now allow IndexedDB in private mode), so we only WARN — the
+// persistent footer notice covers the shared-device case regardless.
+async function checkStorageAvailability() {
+  try {
+    // Import the idb module directly rather than reading window._idbLib — the
+    // module <script> is deferred and may not have run yet when init() fires.
+    const { openDB } = await import('https://cdn.jsdelivr.net/npm/idb@8/build/index.js');
+    const testDB = await openDB('_cg_probe', 1);
+    testDB.close();
+    if (indexedDB.deleteDatabase) indexedDB.deleteDatabase('_cg_probe');
+  } catch (e) {
+    showBanner('⚠️ Private browsing detected, or storage is blocked. Sessions will not be saved after you close this tab.');
+  }
+}
+
+// Phase 2: "Clear my data" — wipe all sessions from this browser's IndexedDB.
+function setupClearData() {
+  const btn = document.getElementById('clear-data-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm('Delete all sessions stored in this browser? This cannot be undone.')) return;
+    try {
+      const { clearAllSessions } = await import('/static/db.js');
+      await clearAllSessions();
+      await loadSessions();   // re-render the now-empty sidebar
+      showToast('All sessions cleared from this browser.');
+    } catch (e) {
+      showToast('Could not clear sessions: ' + (e?.message || e));
+    }
+  });
 }
 
 async function loadRegStatus() {
@@ -768,10 +829,11 @@ async function loadRegStatus() {
   }
 }
 
+// Phase 2: the sidebar reads from the browser's IndexedDB, not the server.
 async function loadSessions() {
   try {
-    const r = await fetch('/api/sessions');
-    const sessions = await r.json();
+    const { getAllSessions } = await import('/static/db.js');
+    const sessions = await getAllSessions();
     const list = document.getElementById('sessionList');
     if (!sessions.length) {
       list.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-3)">No sessions yet</div>';
@@ -784,40 +846,44 @@ async function loadSessions() {
       'INSUFFICIENT_INFORMATION': { text: 'No verdict', color: '#666' },
     };
     list.innerHTML = sessions.map(s => {
-      // Human-readable title: first file (minus .pdf) + verdict, e.g.
-      // "synthetic_contract — EMPLOYER_AT_FAULT"; "<name> — pending" if no verdict.
-      const first = (s.filenames || [])[0] || 'contract';
-      const base = String(first).replace(/\.pdf$/i, '');
-      const hasVerdict = s.verdict && s.verdict !== 'INSUFFICIENT_INFORMATION';
-      const title = `${base} — ${hasVerdict ? s.verdict : 'pending'}`;
+      // title was computed and stored at save time (Step 4).
       const date = new Date(s.created_at).toLocaleString('en-SG', {
         month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
       });
       const vl = verdictLabel[s.verdict] || verdictLabel['INSUFFICIENT_INFORMATION'];
       return `<div class="session-item" onclick="loadSession('${s.id}')">
         <div class="session-date">${date}</div>
-        <div class="session-files">${esc(title)}</div>
+        <div class="session-files">${esc(s.title || 'Session')}</div>
         <span style="font-size:10px;font-weight:700;color:${vl.color}">⚖ ${vl.text}</span>
       </div>`;
     }).join('');
-  } catch {}
+  } catch (e) { console.error('loadSessions (IndexedDB) failed', e); }
 }
 
+// Phase 2: load a saved session from IndexedDB and re-render it. The full API
+// response was stored under .analysis, so we rebuild the exact render bundle —
+// including entity_map, which means de-redaction works on reload too.
 async function loadSession(id) {
   try {
     showLoading('Loading session…', '');
-    const r = await fetch(`/api/session/${id}`);
-    const d = await r.json();
+    const { getSession } = await import('/static/db.js');
+    const session = await getSession(id);
     hideLoading();
-    // CRITICAL (PM5): pass the combined object so the judgment renders too.
+    if (!session) {
+      showToast('Session not found. It may have been cleared from this browser.');
+      return;
+    }
+    const d = session.analysis || {};
     renderAnalysis(
-      { analysis: d.analysis, judgment: d.judgment },
-      d.filenames || [],
-      d.context_filenames || [],
+      { analysis: d.analysis, judgment: d.judgment,
+        redaction_reports: d.redaction_reports, attestation: d.attestation,
+        entity_map: d.entity_map, entity_counts: d.entity_counts },
+      session.contract_filenames || [],
+      session.context_filenames || [],
     );
   } catch(e) {
     hideLoading();
-    showToast('Failed to load session. The server may be restarting.');
+    showToast('Failed to load session from browser storage.');
   }
 }
 
@@ -955,6 +1021,34 @@ async function runAnalysis() {
       redaction_reports: data.redaction_reports, attestation: data.attestation,
       entity_map: data.entity_map, entity_counts: data.entity_counts },
       contractNames, contextNames);
+
+    // Phase 2: persist this analysis to the browser's IndexedDB (NOT the server).
+    const verdict = data.judgment?.verdict || null;
+    const first = (contractNames[0] || 'Contract').replace(/\.pdf$/i, '');
+    const hasVerdict = verdict && verdict !== 'INSUFFICIENT_INFORMATION';
+    const title = `${first} — ${hasVerdict ? verdict : 'pending'}`;
+    try {
+      const { saveSession } = await import('/static/db.js');
+      await saveSession({
+        id: crypto.randomUUID(),
+        created_at: new Date().toISOString(),
+        title,
+        contract_filenames: contractNames,
+        context_filenames: contextNames,
+        analysis: data,                       // full API response (rebuilt on reload)
+        entity_map: data.entity_map || null,  // {real -> placeholder}; for de-redaction
+        verdict,
+      });
+    } catch (e) {
+      // Step 7: surface storage problems clearly. The analysis already rendered
+      // above, so a save failure must not masquerade as a network error.
+      if (e && e.name === 'QuotaExceededError') {
+        showToast('Browser storage is full. Click "Clear my data" to remove old sessions, then re-run.');
+      } else {
+        console.error('saveSession (IndexedDB) failed', e);
+        showToast('Could not save this session to your browser.');
+      }
+    }
     await loadSessions();
   } catch(e) {
     clearInterval(stepTimer);

@@ -40,6 +40,9 @@ def init_db() -> None:
                 category TEXT,
                 scraped_at TEXT
             );
+            -- DEPRECATED (Phase 2): session writes moved to client IndexedDB.
+            -- Server no longer INSERTs here; table kept (not dropped) for safe
+            -- migration. Read endpoints return 410 Gone.
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,
                 created_at TEXT,

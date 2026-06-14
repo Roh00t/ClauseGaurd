@@ -22,8 +22,8 @@ from pathlib import Path
 # Make `backend` importable when uvicorn is launched from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
@@ -111,6 +111,7 @@ async def regulations():
 @limiter.limit(RATE_LIMIT)
 async def analyze(
     request: Request,
+    response: Response,
     contract_files: list[UploadFile] = File(default=[]),
     context_files: list[UploadFile] = File(default=[]),
 ):
@@ -242,31 +243,15 @@ async def analyze(
     except Exception as e:  # noqa: BLE001 -- attestation must never block analysis
         attestation = {"error": f"signing unavailable: {e}", "report_hash": report_hash}
 
-    # ── 6. Persist the session (parameterised — RT8). ──────────────────────
+    # ── 6. PHASE 2: NO server-side session persistence. ─────────────────────
+    # The session (analysis results, entity map, etc.) is stored client-side in
+    # the browser's IndexedDB — the server is stateless w.r.t. user content
+    # ("we don't have your data"). We still mint a server-side id for response
+    # correlation, but the client generates its own UUID for storage. The
+    # X-Session-Storage header tells the frontend to persist the result itself.
+    # (regulations and scrape_log tables are server data and are still written.)
     session_id = uuid.uuid4().hex[:8]
-    conn = get_conn()
-    try:
-        conn.execute("""
-            INSERT INTO sessions
-                (id, created_at, filenames, context_filenames, doc_count, context_doc_count,
-                 overall_severity, verdict, analysis, judgment, regulation_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_id,
-            datetime.now().isoformat(),
-            json.dumps([f.filename for f in contract_files]),
-            json.dumps([f.filename for f in context_files]),
-            len(contract_docs),
-            len(context_docs),
-            analysis.get("overall_severity", "MODERATE"),
-            judgment.get("verdict", "INSUFFICIENT_INFORMATION"),
-            json.dumps(analysis),
-            json.dumps(judgment),
-            reg_data.get("source"),
-        ))
-        conn.commit()
-    finally:
-        conn.close()
+    response.headers["X-Session-Storage"] = "client"
 
     return {
         "session_id": session_id,
@@ -284,49 +269,24 @@ async def analyze(
     }
 
 
-# ── Sessions ─────────────────────────────────────────────────────────────────
+# ── Sessions (DEPRECATED — Phase 2) ──────────────────────────────────────────
+# Sessions now live in the browser's IndexedDB. These read endpoints are kept
+# (not deleted) so any old/cached client gets a clear 410 Gone instead of a 404
+# or stale server data. The sessions table is no longer written to.
+_SESSIONS_GONE = {
+    "error": "Sessions are now stored in your browser only. "
+             "Re-run the analysis to see results."
+}
+
+
 @app.get("/api/sessions")
 async def sessions():
-    conn = get_conn()
-    try:
-        rows = conn.execute("""
-            SELECT id, created_at, filenames, doc_count, overall_severity, verdict
-            FROM sessions ORDER BY created_at DESC LIMIT 30
-        """).fetchall()
-    finally:
-        conn.close()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["filenames"] = json.loads(d.get("filenames") or "[]")
-        out.append({
-            "id": d["id"],
-            "created_at": d["created_at"],
-            "filenames": d["filenames"],
-            "overall_severity": d.get("overall_severity"),
-            "verdict": d.get("verdict"),  # shown in sidebar
-        })
-    return out
+    return JSONResponse(status_code=410, content=_SESSIONS_GONE)
 
 
 @app.get("/api/session/{sid}")
 async def session(sid: str):
-    conn = get_conn()
-    try:
-        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (sid,)).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        raise HTTPException(404, "Session not found.")
-    d = dict(row)
-    return {
-        "id": d["id"],
-        "created_at": d["created_at"],
-        "filenames": json.loads(d.get("filenames") or "[]"),
-        "context_filenames": json.loads(d.get("context_filenames") or "[]"),
-        "analysis": json.loads(d.get("analysis") or "{}"),
-        "judgment": json.loads(d.get("judgment") or "{}"),  # PM5: was missing
-    }
+    return JSONResponse(status_code=410, content=_SESSIONS_GONE)
 
 
 # Mount static assets last so it never shadows the API routes.
