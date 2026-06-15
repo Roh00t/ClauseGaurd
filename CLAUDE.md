@@ -68,11 +68,17 @@ Known gap (P1): single-word company names, novel-suffix orgs still leak.
   red flags table, actions, MOM letter, attestation), streams back,
   stores nothing. Verified: real 40KB DOCX, zero placeholder tokens.
   HMAC-symmetric attestation note included per guardrail #6.
-- 🔄 Phase 5 (Production Readiness): IN PROGRESS
-  ToS/Privacy Policy (/tos), hybrid rate limiting (per-IP + per-session-
-  token), feedback mechanism (client-side IndexedDB), accessibility
-  (ARIA live regions, tab order, mobile viewport), multi-language
-  (EN/MS/TL UI copy only — analysis output stays English).
+- ✅ Phase 5 (Production Readiness): COMPLETE
+  ToS/Privacy Policy at /tos ("retains nothing", never "we never see");
+  hybrid rate limiting (20/min per-IP + 5/min per-session-token via
+  X-Session-Token header, in-memory window); feedback thumbs up/down per
+  red flag stored in IndexedDB (no server writes); accessibility (ARIA
+  live regions on results/loading/toast, all 6 interactive elements
+  tab-reachable, body overflow-x:hidden prevents mobile h-scroll);
+  multi-language EN/MS/TL UI copy via frontend/i18n.js (analysis output
+  stays English; Tagalog carries stronger MOM-letter warning). All 7
+  final-verification checks pass. P1s logged (tab order, mobile sidebar,
+  badge contrast, token-rotation bypass).
 
 ## Active Roadmap Direction
 - **Phase 5 (current):** Production readiness — ToS, rate limiting,

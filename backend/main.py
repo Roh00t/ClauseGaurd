@@ -15,6 +15,7 @@ Run from the repo root (note the package path — backend/__init__.py must exist
 import os
 import sys
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,13 +50,33 @@ from backend.security import (
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
-# ── App + rate limiting (RT4) ────────────────────────────────────────────────
-# Configurable so the automated stress suite (which fires many analyze calls in
-# seconds) can raise it; production default is 5/minute per IP.
-RATE_LIMIT = os.getenv("CLAUSEGUARD_RATE_LIMIT", "5/minute")
+# ── App + HYBRID rate limiting (Phase 5) ─────────────────────────────────────
+# Per-IP burst limit (slowapi) raised to 20/min: generous for a single user
+# behind NAT/retries, not generous enough for abuse. Configurable so the stress
+# suite can raise it.
+RATE_LIMIT = os.getenv("CLAUSEGUARD_RATE_LIMIT", "20/minute")
 limiter = Limiter(key_func=get_remote_address, default_limits=[])
 app = FastAPI(title="ClauseGuard", version="2.0")
 app.state.limiter = limiter
+
+# Secondary per-session-token gate. Per-IP alone is too restrictive behind NAT;
+# per-token alone is bypassable by minting new UUIDs — together they cover both
+# vectors. In-memory sliding window (single-process MVP; no Redis). P1: distinct
+# tokens accumulate small empty lists over long uptime — fine for MVP.
+_SESSION_LIMIT = int(os.getenv("CLAUSEGUARD_SESSION_RATE_LIMIT", "5"))
+_SESSION_WINDOW = 60  # seconds
+_session_token_counts: dict = {}  # token -> list[timestamp]
+
+
+def _check_session_rate(token: str, limit: int = _SESSION_LIMIT, window: int = _SESSION_WINDOW) -> bool:
+    """True if this token is under its limit (and records the hit); False if over."""
+    now = time.time()
+    timestamps = [t for t in _session_token_counts.get(token, []) if now - t < window]
+    if len(timestamps) >= limit:
+        _session_token_counts[token] = timestamps  # keep pruned
+        return False
+    _session_token_counts[token] = timestamps + [now]
+    return True
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -87,6 +108,12 @@ async def _startup():
 @app.get("/")
 async def root():
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/tos")
+async def tos():
+    """Privacy Policy & Terms (Phase 5). Static page, no user data."""
+    return FileResponse(FRONTEND_DIR / "tos.html")
 
 
 @app.get("/health")
@@ -123,6 +150,14 @@ async def analyze(
     (context_files) is optional (dispute context: PDF/TXT/EML). With no context,
     the judgment comes back INSUFFICIENT_INFORMATION.
     """
+    # ── 0. Per-session-token rate gate (Phase 5 hybrid). Runs before any other
+    #       work so a throttled session gets 429, not a 400 on body validation.
+    #       Only applies when the client sends X-Session-Token; per-IP (decorator)
+    #       always applies. ──────────────────────────────────────────────────
+    session_token = request.headers.get("X-Session-Token")
+    if session_token and not _check_session_rate(session_token):
+        raise HTTPException(429, "Too many requests for this session — please wait a minute and try again.")
+
     # ── 1. Validate counts (combined total — PM13/RT4) ─────────────────────
     total_files = len(contract_files) + len(context_files)
     if total_files == 0:

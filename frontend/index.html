@@ -421,6 +421,12 @@ body{
 }
 .flag-card.open .flag-body{display:block}
 .flag-row{margin-bottom:10px}
+.flag-feedback{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}
+.flag-feedback .lbl{font-size:12px;color:var(--text-3);margin-right:2px}
+.feedback-btn{background:var(--surface);border:1px solid var(--border-2);border-radius:6px;cursor:pointer;font-size:14px;padding:3px 9px;color:var(--text-2)}
+.feedback-btn:hover{border-color:var(--text-3)}
+.feedback-btn.active{border-color:var(--accent);background:rgba(217,119,6,.15);color:var(--text)}
+.feedback-note{font-size:12px;color:var(--text-3)}
 .flag-label{
   font-size:10px;font-weight:600;letter-spacing:.06em;
   text-transform:uppercase;color:var(--text-3);
@@ -647,6 +653,8 @@ body{
       Using a shared or public computer? Click "Clear my data" when done, or use a
       private/incognito window.
     </div>
+    <a href="/tos" target="_blank" data-i18n="privacy_link"
+       style="color:var(--accent);font-size:11px;display:block;margin-bottom:8px">Privacy Policy &amp; Terms</a>
     Data sourced from mom.gov.sg · For reference only
   </div>
 </aside>
@@ -661,6 +669,12 @@ body{
       style="display:none;margin-left:auto;margin-right:14px;padding:7px 14px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);font:600 12px var(--font);cursor:pointer">
       ⬇ Download Report (.docx)
     </button>
+    <select id="lang-selector" aria-label="Language"
+      style="margin-right:14px;background:var(--surface);color:var(--text);border:1px solid var(--border-2);border-radius:var(--radius-sm);font:600 12px var(--font);padding:5px 8px;cursor:pointer">
+      <option value="en">EN</option>
+      <option value="ms">MS</option>
+      <option value="tl">TL</option>
+    </select>
     <div class="reg-status" id="regStatus">
       <div class="reg-dot" id="regDot"></div>
       <span id="regLabel">Checking MOM regulations…</span>
@@ -690,11 +704,12 @@ body{
     </div>
 
     <!-- Analysis output rendered here -->
-    <div class="analysis-area" id="analysisArea" style="display:none"></div>
+    <div class="analysis-area" id="analysisArea" role="status" aria-live="polite" aria-label="Analysis results" style="display:none"></div>
   </div>
 
   <!-- Dual upload section -->
   <div class="upload-section">
+    <div data-i18n="disclaimer" style="font-size:11px;color:var(--text-3);margin-bottom:10px;line-height:1.5">Not legal advice and not exhaustive. A 'no red flags found' result does not guarantee a contract is fair. Singapore employment contracts (MVP scope).</div>
     <div class="upload-panels">
 
       <!-- Panel A — Employment Documents (required, PDF) -->
@@ -765,7 +780,7 @@ body{
 </main>
 
 <!-- Loading overlay -->
-<div class="loading-overlay" id="loadingOverlay" style="display:none">
+<div class="loading-overlay" id="loadingOverlay" role="status" aria-live="assertive" aria-label="Analysis in progress" style="display:none">
   <div class="loading-box">
     <div class="spinner"></div>
     <div class="loading-text" id="loadingText">Extracting document text…</div>
@@ -773,7 +788,7 @@ body{
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="alert" aria-live="assertive"></div>
 
 <script>
 // ── STATE ────────────────────────────────────────────────────
@@ -781,9 +796,38 @@ let contractFiles = [];   // Panel A — employment documents
 let contextFiles = [];    // Panel B — dispute context
 let currentSession = null;
 let currentReport = null;   // Phase 4: holds the currently-displayed analysis for DOCX download
+let currentSessionId = null; // Phase 5: id of the currently-displayed session (for feedback writes)
+let _i18n = null;            // Phase 5: loaded i18n module (translations + applyTranslations)
+
+// Phase 5: stable per-tab token for the per-session rate gate (X-Session-Token).
+function getSessionToken() {
+  let t = sessionStorage.getItem('cg_session_token');
+  if (!t) { t = crypto.randomUUID(); sessionStorage.setItem('cg_session_token', t); }
+  return t;
+}
+
+// Phase 5: record per-flag feedback in IndexedDB only (no server writes — guardrail #3).
+async function recordFeedback(flagId, value) {
+  if (!currentSessionId) return;
+  const { getSession, saveSession } = await import('/static/db.js');
+  const session = await getSession(currentSessionId);
+  if (!session) return;
+  const feedback = session.feedback || {};
+  feedback[flagId] = { value, recorded_at: new Date().toISOString() };
+  await saveSession({ ...session, feedback });
+  // Update UI: active state + note for this flag's control.
+  const ctrl = document.querySelector(`.flag-feedback[data-flag-id="${flagId}"]`);
+  if (ctrl) {
+    ctrl.querySelectorAll('.feedback-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.value === value));
+    const note = ctrl.querySelector('.feedback-note');
+    if (note) note.textContent = value === 'accurate' ? '✓ Marked accurate' : '✗ Marked inaccurate';
+  }
+}
 
 // ── INIT ─────────────────────────────────────────────────────
 async function init() {
+  await setupI18n();
   await checkStorageAvailability();
   await loadRegStatus();
   await loadSessions();
@@ -791,6 +835,23 @@ async function init() {
   setupClearData();
   setupChatCounter();
   setupDownload();
+}
+
+// Phase 5: multi-language UI copy (EN/MS/TL). Persisted in localStorage.
+async function setupI18n() {
+  try {
+    _i18n = await import('/static/i18n.js');
+    const sel = document.getElementById('lang-selector');
+    const lang = _i18n.getLang();
+    if (sel) {
+      sel.value = lang;
+      sel.addEventListener('change', () => {
+        _i18n.setLang(sel.value);
+        _i18n.applyTranslations(sel.value);
+      });
+    }
+    _i18n.applyTranslations(lang);
+  } catch (e) { console.error('i18n setup failed', e); }
 }
 
 // ── PHASE 4: DOWNLOAD REPORT (.docx) ─────────────────────────
@@ -953,11 +1014,13 @@ async function loadSession(id) {
       showToast('Session not found. It may have been cleared from this browser.');
       return;
     }
+    currentSessionId = id;   // Phase 5: track for feedback writes
     const d = session.analysis || {};
     renderAnalysis(
       { analysis: d.analysis, judgment: d.judgment,
         redaction_reports: d.redaction_reports, attestation: d.attestation,
-        entity_map: d.entity_map, entity_counts: d.entity_counts },
+        entity_map: d.entity_map, entity_counts: d.entity_counts,
+        feedback: session.feedback || {} },   // Phase 5: show saved feedback state
       session.contract_filenames || [],
       session.context_filenames || [],
     );
@@ -1047,6 +1110,7 @@ function newAnalysis() {
   document.getElementById('analysisArea').style.display = 'none';
   currentSession = null;
   currentReport = null;
+  currentSessionId = null;
   const dl = document.getElementById('download-report-btn');
   if (dl) dl.style.display = 'none';
 }
@@ -1102,7 +1166,10 @@ async function runAnalysis() {
     const chatText = (document.getElementById('chat-input')?.value || '').trim();
     if (chatText) form.append('chat_context', chatText);
 
-    const r = await fetch('/api/analyze', { method: 'POST', body: form });
+    const r = await fetch('/api/analyze', {
+      method: 'POST', body: form,
+      headers: { 'X-Session-Token': getSessionToken() },  // Phase 5: per-session rate gate
+    });
     clearInterval(stepTimer);
 
     if (!r.ok) {
@@ -1132,8 +1199,9 @@ async function runAnalysis() {
     const title = `${first} — ${hasVerdict ? verdict : 'pending'}`;
     try {
       const { saveSession } = await import('/static/db.js');
+      currentSessionId = crypto.randomUUID();   // Phase 5: track for feedback writes
       await saveSession({
-        id: crypto.randomUUID(),
+        id: currentSessionId,
         created_at: new Date().toISOString(),
         title,
         contract_filenames: contractNames,
@@ -1142,6 +1210,7 @@ async function runAnalysis() {
         entity_map: data.entity_map || null,  // {real -> placeholder}; for de-redaction
         verdict,
         chat_context: chatText,               // Phase 3: raw chat — stays local (IndexedDB only)
+        feedback: {},                         // Phase 5: per-flag feedback (client-side only)
       });
     } catch (e) {
       // Step 7: surface storage problems clearly. The analysis already rendered
@@ -1275,6 +1344,7 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
   const attestation = (data && data.attestation) || null;
   const entityMap = (data && data.entity_map) || {};           // {real -> placeholder}
   const entityCounts = (data && data.entity_counts) || {};     // {type -> count}
+  const fb = (data && data.feedback) || {};                    // Phase 5: {flagId -> {value, recorded_at}}
   // Reverse map for client-side de-redaction: {placeholder -> real}. Built and
   // used ONLY in the browser — real names are never sent back to the server.
   const deRedact = Object.fromEntries(Object.entries(entityMap).map(([real, ph]) => [ph, real]));
@@ -1321,7 +1391,7 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
     html += `<div class="msg">
       <div class="severity-banner" style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.28)">
         <div class="severity-text">
-          <strong>Privacy Protection Active.</strong> Before analysis, ClauseGuard replaced
+          <strong data-i18n="redaction_banner_title">Privacy Protection Active</strong>. Before analysis, ClauseGuard replaced
           names, organisations, ID numbers, emails, phone numbers, and addresses with
           anonymous placeholders. The AI only ever saw these placeholders — never your real
           details. Real names shown in the MOM letter were filled in locally in your browser
@@ -1396,6 +1466,14 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
           </div>
           ${f.evidence_quote ? `<div class="flag-quote">"${esc(f.evidence_quote)}"</div>` : ''}
           ${f.mom_regulation ? `<div class="flag-mom" style="margin-top:10px">⚖ MOM: ${esc(f.mom_regulation)}</div>` : ''}
+          <div class="flag-feedback" data-flag-id="${f.id}">
+            <span class="lbl">Is this flag accurate?</span>
+            <button class="feedback-btn${fb[f.id]?.value === 'accurate' ? ' active' : ''}" data-value="accurate"
+              onclick="recordFeedback(${JSON.stringify(f.id)}, 'accurate')" title="This flag is accurate">👍</button>
+            <button class="feedback-btn${fb[f.id]?.value === 'inaccurate' ? ' active' : ''}" data-value="inaccurate"
+              onclick="recordFeedback(${JSON.stringify(f.id)}, 'inaccurate')" title="This flag is inaccurate">👎</button>
+            <span class="feedback-note">${fb[f.id] ? (fb[f.id].value === 'accurate' ? '✓ Marked accurate' : '✗ Marked inaccurate') : ''}</span>
+          </div>
         </div>
       </div>`;
     }
@@ -1515,6 +1593,9 @@ function renderAnalysis(data, contractFilenames, contextFilenames) {
 
   area.innerHTML = html;
   area.scrollTop = 0;
+
+  // Phase 5: translate freshly-rendered dynamic content (e.g. redaction banner).
+  if (_i18n) _i18n.applyTranslations(_i18n.getLang());
 
   // Auto-open first critical flag
   const firstCritical = a.red_flags?.find(f=>f.severity==='CRITICAL');

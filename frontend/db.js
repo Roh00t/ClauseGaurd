@@ -29,6 +29,8 @@ export async function getDB() {
 //   analysis: object (full API response),
 //   entity_map: object | null,  // placeholder -> real value (for de-redaction)
 //   verdict: string | null,
+//   chat_context: string,       // Phase 3: raw chat context (client-side only)
+//   feedback: object,           // Phase 5: { flagId: {value:'accurate'|'inaccurate', recorded_at} }
 // }
 
 export async function saveSession(session) {

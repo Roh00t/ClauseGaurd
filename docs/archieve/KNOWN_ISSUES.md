@@ -355,3 +355,51 @@ was not confirmed in this session. Deferred to Phase 6.
   with quality-unknown translations (Phase 6 consideration)
 - ToS is AI-generated content, not reviewed by a lawyer — add a note
   "for informational purposes, not legal advice" to the ToS page itself
+## PHASE 5 — Production Readiness — COMPLETE (2026-06-15)
+
+All 5 steps done; all 7 final-verification checks PASS. No P0s.
+
+- **Step 1 ToS/Privacy** — `frontend/tos.html` at `/tos`; "retains nothing" present,
+  TokenRouter + Bright Data + IndexedDB named, "not a lawyer" present, does NOT say
+  "we never see your data" (guardrail #12). Footer "Privacy Policy & Terms" link added.
+  Self-disclaimer: page is AI-generated, not lawyer-reviewed.
+- **Step 2 Rate limiting** — hybrid: per-IP 20/min (slowapi, raised from 5) + per-session-
+  token 5/min via `X-Session-Token` header (in-memory sliding window). Verified: token 429
+  at req #6, per-IP 429 at req #21. Frontend sends a stable per-tab token (sessionStorage).
+- **Step 3 Feedback** — 👍/👎 per red flag → IndexedDB `feedback` field, no server writes.
+  Verified: click persists, reload shows marked state.
+- **Step 4 Accessibility** — 4a ARIA live regions on #analysisArea (status/polite),
+  #loadingOverlay (status/assertive), #toast (alert/assertive). 4b all 6 interactive
+  elements tab-reachable (Analyse when enabled). 4c no horizontal scroll (body
+  overflow-x:hidden). 4d contrast check done (P1 below).
+- **Step 5 Multi-language** — `frontend/i18n.js` EN/MS/TL for UI copy (disclaimer,
+  redaction banner title, privacy link; redaction note + mom-letter note keys defined).
+  Language selector in topbar, persisted in localStorage. Tagalog mom_letter_note carries
+  the stronger "not a legal translation — verify" warning. Verified: switch + persist.
+
+### P1 notes (Phase 5)
+- **Tab order interleaves sidebar items** (New Analysis, Clear-my-data, Privacy link come
+  before the main-content panels because the sidebar precedes main in the DOM). All 6
+  critical elements ARE reachable; only the order differs from the ideal. Non-blocking.
+- **Mobile: 256px fixed, non-shrinking sidebar** cramps content at 375px (leaves ~119px for
+  main). No horizontal scroll (body clips overflow-x), but a proper responsive pass
+  (collapse/stack the sidebar on mobile) is deferred — could not verify a true 375px render
+  via the Chrome MCP (resize_window would not shrink innerWidth below the screen).
+- **4d colour contrast FAILS WCAG AA**: the CRITICAL severity pill is red text
+  `rgb(239,68,68)` on a translucent-red background (`rgba(239,68,68,.25)`) — same hue, well
+  below 4.5:1. Other severity pills likely similar. Needs distinct high-contrast text colours.
+- **Rate-limit per-session-token still bypassable** by rotating new UUIDs while staying
+  under the per-IP 20/min (inherent to no-auth design; the hybrid raises the bar, not a wall).
+- **In-memory token counts** accumulate small empty lists per distinct token over long uptime
+  (no eviction sweep) — fine for single-process MVP; use Redis + TTL for production scale.
+- **Feedback is client-side only** — no aggregate signal; opt-in sharing needs a consent flow.
+- **i18n covers UI copy only** — red flags / summaries / AI output remain English.
+
+### Phase 5 stress-test results (2026-06-15)
+- **Automated regression: `tests/test_backend.py` 34/34 PASS** (20:17, real LLM/Daytona).
+  Phase 5 changes (rate limit 5→20, X-Session-Token gate, /tos, /api/download) regressed nothing.
+- **Manual P5 checks PASS:** P5-1 ToS content; P5-2 rate limits A (per-IP 429@21), B (token 429@6),
+  C (different tokens both 400, independent counters); P5-3 feedback persists; P5-4 ARIA; P5-5 i18n.
+- **Doc P1:** STRESS_TEST.md P5-4 TEST A reads `getElementById('results')`, but the real results
+  container is `#analysisArea` (the task used `id="results"` illustratively). ARIA verified on
+  `#analysisArea` (role=status, aria-live=polite). The test doc's id is stale, not a code gap.
