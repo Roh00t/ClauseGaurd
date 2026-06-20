@@ -209,6 +209,30 @@ Expected: 34/34 — actual: 33/34, see Known Caveats.
 - [x] analysis_metadata contains metadata only, zero content leakage
 - [x] Regression suite passes — 33/34, see Known Caveats
 
+## PART D — POSTHOG + ABOUT/PRICING/SUPPORT PAGES
+
+### TEST D1 — Live event delivery (the one check nothing else replaces)
+With the real POSTHOG_KEY active, perform: a mode switch, a language
+switch, a full analysis, a paywall hit. Log into your actual PostHog
+dashboard → Live Events. Do all 4+ events appear within ~30s? Spot-check
+2-3 — metadata only, no document text/filenames/question text?
+P0 if events never arrive (dead integration despite "working" code).
+
+### TEST D2 — Analytics disabled during tests
+Run the regression suite with CLAUSEGUARD_DISABLE_ANALYTICS=1 set.
+Confirm no network calls to PostHog fire (check via a packet capture
+or simply confirm no new events appear in Live Events during the run).
+
+### TEST D3 — Pages render and gate correctly
+/about, /pricing, /support all return 200. Pricing CTAs are visibly
+disabled with "Coming soon," not silently non-functional. Support page
+does not imply Pro is purchasable today. No console errors on any page.
+
+### PART D FINAL CHECKLIST
+- [ ] Live PostHog delivery confirmed (TEST D1) — NOT YET DONE
+- [ ] Analytics silent during test runs (TEST D2)
+- [ ] All 3 new pages render correctly, gated UI verified (TEST D3)
+
 ---
 
 ## KNOWN CAVEATS AFTER FULL V3 BUILD (2026-06-20)

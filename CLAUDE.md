@@ -72,28 +72,45 @@ is persistent background context only.
 
 ## v3 Production Additions
 - **Supabase** (auth + metadata storage) — project cbkajlkttrxzkligbpdt,
-  keys in `.env`. Schema CONFIRMED RUN 2026-06-20: the 3 tables initially
-  had only id+created_at; an ALTER-TABLE migration (run by user in SQL
-  Editor) added user_id, tier, analyses_used (user_profiles); user_id, mode,
-  verdict_category, docs_count (analysis_metadata); the payments stub; RLS
-  policies; and the handle_new_user() signup trigger.
-- **Stripe** — sandbox keys exist (publishable key only shared so far),
-  but integration is explicitly DEFERRED. Do not install the `stripe`
-  package or build checkout/webhook logic without being separately asked.
-- **PostHog** (product analytics) — WIRED 2026-06-20. Server-side Python
-  client in main.py (`posthog>=3.0.0,<4.0.0` — pin <4: v7 broke the ctor +
-  capture() API) + posthog-js via CDN in index.html. Init is fail-soft and
-  DISABLED when POSTHOG_PROJECT_TOKEN is empty OR CLAUSEGUARD_DISABLE_ANALYTICS=1
-  (the 34-test suite sets the latter so runs never hit the prod project).
-  enable_exception_autocapture=False (guardrail #13 — no uncurated tracebacks).
-  ALL events metadata-only (counts/lengths/flags/mode/tier — never document
-  text, filenames, or question text). Server events: analysis_completed,
-  analysis_failed, analysis_file_rejected, upload_size_exceeded,
-  free_tier_limit_reached, rate_limit_exceeded, report_downloaded,
-  chat_followup_asked. Client funnel events: mode_selected, language_switched,
-  analysis_started, paywall_hit, user_signed_up, user_logged_in. distinct_id =
-  Supabase user_id when logged in, else "anonymous"; identify on login AND on
-  restored session (returning visitor); reset on sign-out.
+  keys in `.env`. Schema confirmed run 2026-06-20 via SQL Editor migration.
+- **PostHog** — WIRED 2026-06-20, hybrid architecture (NOT frontend-only
+  as originally scoped — a PostHog setup wizard had already added
+  server-side tracking before this session; audited and fixed rather
+  than rewritten). Pinned `posthog>=3.0.0,<4.0.0` (3.25.0 installed) —
+  the unpinned wizard default pulled v7.x, whose `capture()` silently
+  swaps the meaning of its first positional arg vs v3 (event vs
+  distinct_id) — a corruption bug, not a crash, easy to miss. TRACKED
+  DEBT: should eventually upgrade to 7.x properly (rewrite call sites)
+  rather than stay pinned indefinitely.
+  - `enable_exception_autocapture=False` — wizard default was `True`,
+    which would have shipped raw tracebacks (possible document text/
+    filenames) to PostHog. Guardrail #13 violation, caught and disabled.
+  - Analytics auto-disabled when token empty or
+    `CLAUSEGUARD_DISABLE_ANALYTICS=1` (set during test runs — suite
+    must never fire real events into the prod PostHog project).
+  - `posthog.identify()` wired on restored session + sign-in, with a
+    pending-identify queue for the posthog-load race; `posthog.reset()`
+    on sign-out.
+  - Events: wizard's server-side set, PLUS the 4 originally-specified
+    frontend funnel events (`mode_selected`, `language_switched`,
+    `analysis_started`, `paywall_hit`). `report_downloaded` /
+    `chat_followup_asked` attribute to logged-in user_id when a JWT
+    is present (previously hardcoded to "anonymous").
+  - All properties audited metadata-only (counts/lengths/flags) —
+    no document text, filenames, or question text in any event.
+  - **NOT YET CONFIRMED: live event delivery into the real PostHog
+    dashboard.** Code-level and stubbed-recorder verification only.
+    Do not consider this fully done until checked manually.
+- **Stripe** — sandbox keys exist, integration explicitly DEFERRED.
+  Do not install or build checkout/webhook logic without being asked.
+- **About/Pricing/Support pages** — DONE 2026-06-20. `/about`, `/pricing`,
+  `/support`, served via FastAPI FileResponse (same pattern as `/tos`).
+  All red-team constraints verified live in browser, zero console errors.
+  Open placeholders: contact email is a placeholder (`hello@clauseguard.sg`,
+  not a real inbox yet); community link is "coming soon" pending a
+  Discord-vs-Reddit decision.
+- **`.env.example` Supabase keys** — approved to add, completion not
+  confirmed in the session transcript. Verify before assuming done.
 - **Render deploy, GitHub Actions CI/CD** — not started.
 
 ## Environment — Critical Interpreter Gotcha
@@ -140,17 +157,11 @@ Known gap (P1): single-word company names, novel-suffix orgs still leak.
     path is never exercised by the suite.
 - ⏸ Phase 8 (Stripe Payments): WRITTEN, explicitly deferred. Do not
   start without being asked.
-- ✅ Phase 9: COMPLETE (2026-06-20). PostHog analytics (wizard-built +
-  hardened — see v3 Production Additions) + About/Pricing/Support pages.
-  Pages are static HTML (frontend/about.html, pricing.html, support.html),
-  served via GET /about, /pricing, /support (FileResponse, like /tos),
-  styled to match tos.html, cross-linked + linked from the sidebar footer
-  (data-nav, kept tabbable). About = generic framing, employer NOT named.
-  Pricing = 3 SGD tiers (Free S$0 / Pay-per-use S$2.99 / Pro S$9.99mo), all
-  checkout buttons disabled with visible "Coming soon" (Stripe deferred).
-  Support = community placeholder (coming soon), Pro support "available to
-  Pro members" (not purchasable today), bug report mailto that warns against
-  attaching documents. Contact email: hello@clauseguard.sg (placeholder).
+- ✅ Phase 9 (PostHog + About/Pricing/Support pages): COMPLETE
+  2026-06-20, with one open manual check — see "NOT YET CONFIRMED:
+  live event delivery" above. Do not mark this fully closed until
+  that's verified.
+- ⏸ Phase 8 (Stripe Payments): WRITTEN, explicitly deferred.
 - ⏸ Phase 10 (GitOps/CI/CD/Render deploy): NOT WRITTEN YET.
 
 ## v3 Decisions (locked in 2026-06-20 — do not relitigate without being asked)
@@ -186,6 +197,13 @@ Known gap (P1): single-word company names, novel-suffix orgs still leak.
 - max_tokens=16000, retries x3→x4 on JSON parse failure
 - make_pdf: `bytes(pdf.output())` not `.encode("latin-1")`
 - Module-script timing (Phase 2): idb import direct in checkStorage()
+- PM17: third-party setup wizards (PostHog, or any future auto-
+  instrumentation tool) must be audited before trusting — one such
+  wizard's output briefly broke the app's ability to import at all
+  (unpinned major-version dependency + module-level client init) and
+  separately defaulted to shipping raw exception tracebacks externally.
+  Always investigate wizard-generated diffs against project guardrails
+  before running anything that touches them.
 
 ## Fix Sprint — DONE (2026-06-16, 34/34 regression pass)
 - [x] CRITICAL badge contrast → light text (#fecaca etc) = 7.22:1 WCAG AA.
@@ -233,6 +251,9 @@ Known gap (P1): single-word company names, novel-suffix orgs still leak.
 16. Stripe: not wired. `tier='paid'` only via manual Supabase edit
     until Phase 8 is explicitly started. Do not build checkout flow
     as a side effect of other work.
+17. Third-party SDK auto-instrumentation features (exception autocapture,
+    session replay, etc.) default OFF unless explicitly audited — they
+    bypass the metadata-only discipline guardrail #13 depends on.
 
 ## Working Style
 - STOP after each numbered fix/Part and report before continuing.

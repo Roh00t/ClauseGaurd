@@ -96,3 +96,40 @@ latency-threshold flake). Fix Sprint complete (34/34 at the time).
 - Orphaned pre-Phase-2 session rows in data.db — cleared
 - No session-reload de-redaction — fixed when entity map moved client-side
 - DOCX generator flat-vs-nested schema mismatch — corrected
+### v3 / Analytics (new, 2026-06-20)
+- **Live PostHog event delivery unconfirmed.** All verification so far
+  is code-level (stubbed recorder, property audit). Needs a manual
+  check: trigger real actions, confirm they appear in PostHog Live
+  Events within ~30s.
+- **posthog package pinned to 3.x (3.25.0), not the installed-by-default
+  7.x.** The wizard's generated code used the v3 API; v7 breaks
+  `capture()`'s argument order silently (no error, just wrong data).
+  Tracked debt: upgrade to 7.x properly later, don't leave pinned forever.
+- **`.env.example` Supabase keys — completion not confirmed.** Last
+  known state: approved, not verified done.
+- **Contact email and community link are placeholders** on the new
+  About/Pricing/Support pages (`hello@clauseguard.sg` is not a real
+  inbox; community link says "coming soon," Discord vs Reddit undecided).
+
+### Two distinct flaky tests — do not conflate
+- `test_three_sequential_analyses` — asserts avg latency <90s; real-world
+  LLM latency varies (~47-115s observed), threshold-mismatch flake.
+- `test_analyze_completes_within_budget` — 502 when the LLM returns
+  malformed JSON 4 consecutive times (exhausts all retries); passes
+  clean on isolated re-run. Separate known failure mode from the one above.
+Both are documented transient flakes, not regressions — but track them
+by name, not as one generic "the known flake," or a real regression
+could hide behind that assumption in a future session.
+
+## Recently Resolved (PostHog + Pages, 2026-06-20)
+- App-breaking import failure from an unpinned posthog dependency +
+  module-level client init — caught before merge, not in production
+- v7/v3 API mismatch in capture() argument order — would have silently
+  corrupted all analytics data, caught via investigation before any
+  real events were sent
+- Exception autocapture shipping raw tracebacks externally — disabled
+  (guardrail #13)
+- Returning-visitor identify gap + posthog-load race condition — fixed
+- Misattributed report_downloaded/chat_followup_asked events — now
+  correctly tied to logged-in user_id
+- About/Pricing/Support pages built, red-team constraints verified live

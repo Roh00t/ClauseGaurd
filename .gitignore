@@ -1,5 +1,10 @@
 .env
 .env.*
+.claude/
+.posthog-setup-report.md
+.CODEBASE_GUIDE.md
+.STRESS_TEST.md
+.CLAUDE.md
 !.env.example
 __pycache__/
 *.pyc
@@ -10,4 +15,3 @@ venv/
 .venv/
 test/
 tests/
-.claude/settings.local.json
