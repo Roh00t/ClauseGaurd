@@ -26,7 +26,7 @@ actually means, what's risky, and what to do next. Free for your first analysis.
 
 ### Step-by-step guide
 
-1. **Go to the app** at [clauseguard.onrender.com](https://clauseguard.onrender.com)
+1. **Go to the app** at [https://clausegaurd-hm9g.onrender.com](https://clausegaurd-hm9g.onrender.com)
 2. **Pick your mode** — choose one of the three buttons at the top
 3. **Upload your contract** — drag and drop your PDF into the first panel
 4. **Add context (optional)** — if you have a dispute, upload any supporting
@@ -171,19 +171,6 @@ sample_data/        — Synthetic test fixtures (no real PII)
   (email, tier, usage count).
 - **Always use `python3.13` explicitly.** `python3` on this machine resolves
   to a different version.
-
-### Deploy to Render
-
-Connect your GitHub repo to [render.com](https://render.com). The
-`render.yaml` in the root handles the rest automatically. After the first
-deploy, set two things manually:
-
-1. In **Render dashboard → Environment**: set `ALLOWED_ORIGINS` to your
-   Render URL (e.g. `https://clauseguard.onrender.com`)
-2. In **Supabase dashboard → Authentication → URL Configuration**: add
-   your Render URL as both the Site URL and a Redirect URL
-
----
 
 ## Built with
 
